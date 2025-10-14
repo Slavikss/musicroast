@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 
 # 1) Базовый образ с Python
-FROM python:3.13-slim AS base
+FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -32,8 +32,14 @@ RUN poetry install --no-root --only main
 # 6) Копируем исходники проекта
 COPY . .
 
-# 7) По умолчанию приложение читает .env (load_dotenv в main.py)
-# Можно переопределить переменные окружения при `docker run -e KEY=VALUE`
+# 7) Открываем порт для FastAPI
+EXPOSE 8000
 
-# 8) Команда запуска
-CMD ["poetry", "run", "python", "main.py"]
+# 8) По умолчанию приложение читает .env (load_dotenv в main.py)
+# Можно переопределить переменные окружения при `docker run -e KEY=VALUE`
+# Требуемые переменные окружения:
+# - YANDEX_MUSIC_TOKEN или YA_MUSIC_TOKEN
+# - XAI_API_KEY
+
+# 9) Команда запуска через uvicorn
+CMD ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
