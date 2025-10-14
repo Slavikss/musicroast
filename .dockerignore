@@ -1,0 +1,30 @@
+# Исключаем лишнее из контекста сборки
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/env
+**/venv
+**/.venv
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.tox
+**/.idea
+**/.vscode
+**/.DS_Store
+
+# Кэш/артефакты Poetry
+**/.venv
+**/dist
+**/build
+**/.cache
+
+# Логи
+**/*.log
+
+# Не отправляем локальный .env (при необходимости можно копировать вручную)
+.env
