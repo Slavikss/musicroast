@@ -1,6 +1,13 @@
 import os
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
+import base64
+from io import BytesIO
+import uuid
+from pathlib import Path
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 import uvicorn
@@ -143,6 +150,51 @@ class GeminiRoaster:
         memes = []
         return memes[:5]
 
+    def generate_image(self, roast_text: str) -> Dict[str, str]:
+        """Генерация изображения на основе прожарки"""
+        try:
+            prompt = f"Create a funny meme image representing a musical roast with the following text: {roast_text}"
+
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash-image",
+                contents=prompt,
+            )
+
+            # Извлекаем изображение из ответа
+            image_parts = [
+                part.inline_data.data
+                for part in response.candidates[0].content.parts
+                if part.inline_data
+            ]
+
+            if image_parts and len(image_parts) > 0:
+                # Получаем данные изображения
+                image_data = image_parts[0]
+
+                # Создаем уникальное имя файла
+                image_filename = f"{uuid.uuid4()}.png"
+                image_path = IMAGE_DIR / image_filename
+
+                # Сохраняем изображение как файл с помощью PIL
+                image = Image.open(BytesIO(image_data))
+                image.save(image_path)
+
+                # URL для доступа к изображению
+                image_url = f"/static/images/{image_filename}"
+
+                # Возвращаем только путь до изображения
+                return {"image_url": image_url}
+            else:
+                raise HTTPException(
+                    status_code=500, detail="Не удалось сгенерировать изображение"
+                )
+
+        except Exception as e:
+            print(f"Произошла ошибка при генерации изображения: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Ошибка генерации изображения: {str(e)}"
+            )
+
     @staticmethod
     def _build_prompts(tracks: List[Track]) -> tuple[str, str]:
         system_prompt = f"""
@@ -190,8 +242,8 @@ class GeminiRoaster:
    - Бесстрастный «саркастичный протокол» без эмоций, но с максимальным радиусом обжига  
    - Язык зумеров: мемы, эмоджи-метафоры, хлёсткие сленговые конструкции  
    - Абсурдизм + псевдонаучный анализ = эффект «психодиагноза»  
-   - Полная хладнокровность даже при самой алой сатире
-   - Язык должен быть понятным и доступным для молодежи, но не слишком детским, можно язвительно эмоционировать!
+   - Полная хладнокровность даже при самой алой сатире, можно язвительно эмоционировать!
+   - Язык должен быть понятным и доступным для молодежи, но не слишком детским
    - Не используй сложные слова и грамматические конструкции
    - не используй эмодзи
 
@@ -249,6 +301,12 @@ class GeminiRoaster:
             raise HTTPException(status_code=500, detail=f"Ошибка Gemini API: {str(e)}")
 
 
+class RoastRequest(BaseModel):
+    """Модель запроса для эндпоинта /roast"""
+
+    generate_image: bool = False
+
+
 class MusicRoastService:
     """Основной сервис приложения"""
 
@@ -267,15 +325,21 @@ class MusicRoastService:
         self.normalizer = TrackNormalizer()
         self.roaster = GeminiRoaster(google_api_key)
 
-    def generate_roast(self) -> Dict[str, Any]:
+    def generate_roast(self, generate_image: bool = False) -> Dict[str, Any]:
         """Генерация прожарки для всех треков пользователя"""
         tracks, added_dates = self.music_service.get_all_tracks()
         normalized_tracks = self.normalizer.normalize_tracks(tracks, added_dates)
         roast_text = self.roaster.generate_roast(normalized_tracks)
 
-        return {
+        result = {
             "roast": roast_text,
         }
+
+        if generate_image:
+            image_data = self.roaster.generate_image(roast_text)
+            result["image_url"] = image_data["image_url"]
+
+        return result
 
 
 app = FastAPI(
@@ -284,13 +348,24 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Создаем директорию для хранения изображений, если она не существует
+IMAGE_DIR = Path("static/images")
+IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Монтируем статические файлы
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 service = MusicRoastService()
 
 
-@app.get("/roast", response_model=Dict[str, Any])
-async def get_roast():
+@app.post("/roast")
+async def get_roast(request: RoastRequest = RoastRequest()):
     """Получение прожарки для музыкальной библиотеки"""
-    return service.generate_roast()
+    try:
+        result = service.generate_roast(generate_image=request.generate_image)
+        return JSONResponse(content=result)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 if __name__ == "__main__":
