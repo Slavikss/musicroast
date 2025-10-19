@@ -37,9 +37,8 @@ EXPOSE 8000
 
 # 8) По умолчанию приложение читает .env (load_dotenv в main.py)
 # Можно переопределить переменные окружения при `docker run -e KEY=VALUE`
-# Требуемые переменные окружения:
-# - YANDEX_MUSIC_TOKEN или YA_MUSIC_TOKEN
-# - XAI_API_KEY
 
-# 9) Команда запуска через uvicorn
-CMD ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 9) Команда запуска через uvicorn или телеграм-бот в зависимости от переменной окружения APP_MODE
+ENV APP_MODE=bot
+
+CMD ["bash", "-lc", "if [ \"$APP_MODE\" = \"bot\" ]; then poetry run python -m app.bot; else poetry run uvicorn main:app --host 0.0.0.0 --port 8000; fi"]
