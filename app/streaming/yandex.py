@@ -12,6 +12,14 @@ class YandexMusicStreamingService(StreamingService):
 
     provider: StreamingProvider = StreamingProvider.YANDEX
 
+    @staticmethod
+    def _is_self_owner(owner_id: Union[str, int, None]) -> bool:
+        if owner_id is None:
+            return True
+        if isinstance(owner_id, int):
+            return False
+        return str(owner_id).strip().lower() in {"", "me", "self"}
+
     def __init__(self, token: str):
         super().__init__(token)
         try:
@@ -27,11 +35,45 @@ class YandexMusicStreamingService(StreamingService):
             ) from exc
         self.client = client
 
+    def _get_current_user_uid(self) -> str:
+        """Возвращает UID текущего пользователя из профиля."""
+        try:
+            profile = self.client.me
+        except YandexMusicError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ошибка Yandex Music API при запросе профиля: {str(exc)}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Не удалось получить профиль пользователя: {str(exc)}",
+            ) from exc
+
+        uid: Union[str, int, None]
+        account = getattr(profile, "account", None)
+        if account is not None:
+            uid = getattr(account, "uid", None)
+        else:
+            uid = getattr(profile, "uid", None)
+
+        if not uid:
+            raise HTTPException(
+                status_code=500,
+                detail="Не удалось определить идентификатор пользователя Yandex Music",
+            )
+
+        return str(uid)
+
     def list_playlists(
         self, owner_id: Union[str, int] = "me"
     ) -> List[Dict[str, Any]]:
         """Возвращает список плейлистов пользователя, включая «Мне нравится»."""
         try:
+            current_user_uid = self._get_current_user_uid()
+            target_user_id = (
+                None if self._is_self_owner(owner_id) else str(owner_id)
+            )
             playlists: List[Dict[str, Any]] = []
 
             likes_summary = self.client.users_likes_tracks()
@@ -41,7 +83,7 @@ class YandexMusicStreamingService(StreamingService):
                     "kind": "liked",
                     "title": "Мне нравится",
                     "track_count": likes_count,
-                    "owner_uid": "me",
+                    "owner_uid": current_user_uid,
                     "visibility": "private",
                     "is_liked": True,
                     "description": "Лайкнутые треки пользователя",
@@ -49,7 +91,7 @@ class YandexMusicStreamingService(StreamingService):
             )
 
             personal_playlists = self.client.users_playlists_list(
-                user_id=str(owner_id or "me")
+                user_id=target_user_id
             )
             for playlist in personal_playlists or []:
                 owner = getattr(playlist, "owner", None)
@@ -58,7 +100,7 @@ class YandexMusicStreamingService(StreamingService):
                         "kind": getattr(playlist, "kind", None),
                         "title": getattr(playlist, "title", "") or "Без названия",
                         "track_count": getattr(playlist, "track_count", 0) or 0,
-                        "owner_uid": getattr(owner, "uid", "me"),
+                        "owner_uid": getattr(owner, "uid", None) or current_user_uid,
                         "visibility": getattr(playlist, "visibility", None),
                         "is_liked": False,
                         "description": getattr(playlist, "description", None),
@@ -68,6 +110,11 @@ class YandexMusicStreamingService(StreamingService):
             return playlists
         except HTTPException:
             raise
+        except YandexMusicError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ошибка Yandex Music API при получении плейлистов: {str(exc)}",
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
@@ -77,6 +124,7 @@ class YandexMusicStreamingService(StreamingService):
     def get_liked_tracks(self) -> tuple[List[Any], Dict[str, str], Dict[str, Any]]:
         """Получение лайкнутых треков."""
         try:
+            owner_uid = self._get_current_user_uid()
             liked_tracks_ids = self.client.users_likes_tracks()
             if not liked_tracks_ids or not liked_tracks_ids.tracks:
                 return (
@@ -86,7 +134,7 @@ class YandexMusicStreamingService(StreamingService):
                         "kind": "liked",
                         "title": "Мне нравится",
                         "track_count": 0,
-                        "owner_uid": "me",
+                        "owner_uid": owner_uid,
                         "is_liked": True,
                     },
                 )
@@ -109,13 +157,17 @@ class YandexMusicStreamingService(StreamingService):
                     "kind": "liked",
                     "title": "Мне нравится",
                     "track_count": len(track_ids),
-                    "owner_uid": "me",
+                    "owner_uid": owner_uid,
                     "is_liked": True,
                 },
             )
 
         except HTTPException:
             raise
+        except YandexMusicError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Ошибка Yandex Music API: {str(exc)}"
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Ошибка Yandex Music API: {str(exc)}"
@@ -129,8 +181,12 @@ class YandexMusicStreamingService(StreamingService):
             return self.get_liked_tracks()
 
         try:
+            current_user_uid = self._get_current_user_uid()
+            target_user_id = (
+                None if self._is_self_owner(owner_id) else str(owner_id)
+            )
             playlist = self.client.users_playlists(
-                kind=playlist_kind, user_id=str(owner_id or "me")
+                kind=playlist_kind, user_id=target_user_id
             )
 
             if not playlist:
@@ -165,7 +221,8 @@ class YandexMusicStreamingService(StreamingService):
                 "kind": getattr(playlist, "kind", None),
                 "title": getattr(playlist, "title", "") or "Без названия",
                 "track_count": getattr(playlist, "track_count", len(track_ids)),
-                "owner_uid": getattr(owner, "uid", str(owner_id or "me")),
+                "owner_uid": getattr(owner, "uid", None)
+                or (str(owner_id) if not self._is_self_owner(owner_id) else current_user_uid),
                 "is_liked": False,
                 "visibility": getattr(playlist, "visibility", None),
                 "description": getattr(playlist, "description", None),
@@ -175,6 +232,11 @@ class YandexMusicStreamingService(StreamingService):
 
         except HTTPException:
             raise
+        except YandexMusicError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ошибка Yandex Music API при получении плейлиста: {str(exc)}",
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Не удалось получить плейлист: {str(exc)}"
