@@ -1,3 +1,4 @@
 .env
 poetry.lock
 static/
+__pycache__/

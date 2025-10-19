@@ -19,7 +19,7 @@ ENV POETRY_VERSION=1.8.3 \
     POETRY_VIRTUALENVS_IN_PROJECT=true \
     POETRY_NO_INTERACTION=1
 RUN curl -sSL https://install.python-poetry.org | python3 - && \
-    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+    ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry
 
 WORKDIR /app
 

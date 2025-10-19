@@ -1,20 +1,19 @@
-[project]
+[tool.poetry]
 name = "musicroast"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Vyacheslav Guch",email = "ssslllava11@gmail.com"}
-]
+authors = ["Vyacheslav Guch <ssslllava11@gmail.com>"]
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "yandex-music"
-    , "python-dotenv"
-    , "google-genai"
-    , "fastapi>=0.104.0"
-    , "uvicorn>=0.24.0"
-    , "pydantic>=2.4.2"
-]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+yandex-music = "*"
+python-dotenv = "*"
+google-genai = "*"
+fastapi = ">=0.104.0"
+uvicorn = ">=0.24.0"
+pydantic = ">=2.4.2"
+pillow = "*"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
