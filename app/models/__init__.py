@@ -1,10 +1,11 @@
-from .track import Track
-from .requests import (
-    StreamingCredentials,
-    PlaylistRequest,
-    PlaylistInfoRequest,
-    RoastRequest,
+from .auth import (
+    StoredTokenResponse,
+    YandexInteractiveSessionRequest,
+    YandexInteractiveSessionResponse,
+    YandexOAuthRequest,
 )
+from .requests import PlaylistInfoRequest, PlaylistRequest, RoastRequest, StreamingCredentials
+from .track import Track
 
 __all__ = [
     "Track",
@@ -12,4 +13,8 @@ __all__ = [
     "PlaylistRequest",
     "PlaylistInfoRequest",
     "RoastRequest",
+    "YandexOAuthRequest",
+    "YandexInteractiveSessionRequest",
+    "YandexInteractiveSessionResponse",
+    "StoredTokenResponse",
 ]

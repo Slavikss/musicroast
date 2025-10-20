@@ -1,4 +1,6 @@
 .env
 poetry.lock
-static/
+static/*
+!static/miniapp/
+!static/miniapp/*
 __pycache__/

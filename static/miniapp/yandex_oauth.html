@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <title>MusicRoast · Авторизация Яндекс Музыки</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f111a;
+        --fg: #f6f6f9;
+        --muted: #9ea0b5;
+        --accent: #f97316;
+        --card: rgba(15, 17, 26, 0.86);
+        --danger: #ef4444;
+        --success: #22c55e;
+        --border: rgba(248, 250, 252, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+        background: radial-gradient(circle at top, #172554 0%, #030712 70%);
+        color: var(--fg);
+        min-height: 100vh;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        padding: calc(env(safe-area-inset-top, 10px) + 10px)
+          calc(env(safe-area-inset-right, 10px) + 12px)
+          calc(env(safe-area-inset-bottom, 10px) + 14px)
+          calc(env(safe-area-inset-left, 10px) + 12px);
+      }
+      main {
+        width: 100%;
+        max-width: 768px;
+        background: var(--card);
+        border-radius: 18px;
+        padding: 16px 16px 18px;
+        box-shadow: 0 16px 38px rgba(8, 10, 30, 0.45);
+        backdrop-filter: blur(10px);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1 1 auto;
+        min-height: calc(100vh - 20px);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+      header p {
+        display: none;
+      }
+      .canvas-wrapper {
+        position: relative;
+        border-radius: 16px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+        background: rgba(8, 10, 30, 0.65);
+        flex: 1 1 auto;
+        min-height: 65vh;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        background: #05070f;
+        cursor: pointer;
+        outline: none;
+      }
+      canvas:focus {
+        outline: 2px solid rgba(249, 115, 22, 0.5);
+      }
+      .overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(8, 10, 30, 0.62);
+        backdrop-filter: blur(6px);
+        text-align: center;
+        font-size: 16px;
+        line-height: 1.4;
+        padding: 24px;
+      }
+      .overlay.hidden {
+        display: none;
+      }
+      .controls {
+        margin-top: 0;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      button {
+        appearance: none;
+        border: none;
+        border-radius: 12px;
+        padding: 14px 18px;
+        font-weight: 600;
+        font-size: 15px;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #f97316, #fb923c);
+        color: #0b0b11;
+      }
+      button.secondary {
+        background: rgba(248, 250, 252, 0.08);
+        color: var(--fg);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+      button:not(:disabled):hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 24px rgba(249, 115, 22, 0.35);
+      }
+      .status {
+        min-height: 20px;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: -4px;
+      }
+      .status.error {
+        color: var(--danger);
+      }
+      .status.success {
+        color: var(--success);
+      }
+      .note {
+        margin: 0;
+        font-size: 11px;
+        line-height: 1.45;
+        color: var(--muted);
+      }
+      @media (max-width: 540px) {
+        main {
+          padding: 14px 14px 16px;
+          border-radius: 16px;
+        }
+        header h1 {
+          font-size: 17px;
+        }
+        .canvas-wrapper {
+          min-height: 72vh;
+        }
+        button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>MusicRoast · Яндекс Музыка</h1>
+        <p>
+          Мы открываем реальный браузер в облаке. Войдите в свой Яндекс ID,
+          решите капчу при необходимости и дождитесь, пока бот получит токен.
+          Ваши данные никуда не сохраняются.
+        </p>
+      </header>
+      <section class="canvas-wrapper">
+        <canvas id="browser-canvas" tabindex="0"></canvas>
+        <div id="canvas-overlay" class="overlay">
+          <div id="overlay-message">
+            Инициализируем сессию браузера…
+            <br />
+            Это может занять до 30 секунд.
+          </div>
+        </div>
+      </section>
+      <div class="controls">
+        <button id="restart-btn" class="secondary" type="button">
+          ↻ Перезапустить сессию
+        </button>
+      </div>
+      <div id="status" class="status"></div>
+      <p class="note">
+        Если соединение оборвалось, нажмите «Перезапустить сессию» и повторите
+        вход. Не закрывайте окно до получения уведомления в Telegram.
+      </p>
+    </main>
+    <script>
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) {
+        tg.expand();
+        tg.ready();
+        if (tg.MainButton) {
+          tg.MainButton.hide();
+        }
+      }
+
+      const canvas = document.getElementById("browser-canvas");
+      const ctx = canvas.getContext("2d");
+      const overlay = document.getElementById("canvas-overlay");
+      const overlayMessage = document.getElementById("overlay-message");
+      const restartBtn = document.getElementById("restart-btn");
+      const statusEl = document.getElementById("status");
+
+      const TOKEN_SUCCESS_MESSAGE =
+        "Токен получен! Можно вернуться в Telegram.";
+
+      const SESSION_ENDPOINT = "/auth/yandex/session";
+      const SESSION_CLOSE_ENDPOINT = (id) =>
+        `/auth/yandex/session/${id}/close`;
+
+      let sessionId = null;
+      let socket = null;
+      let viewport = { width: 1280, height: 720 };
+      let pingTimer = null;
+      let isConnected = false;
+
+      function setStatus(message, type) {
+        statusEl.textContent = message || "";
+        statusEl.className = "status" + (type ? " " + type : "");
+      }
+
+      function showOverlay(message) {
+        overlayMessage.textContent = message;
+        overlay.classList.remove("hidden");
+      }
+
+      function hideOverlay() {
+        overlay.classList.add("hidden");
+      }
+
+      function getTelegramUserId() {
+        if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+          return tg.initDataUnsafe.user.id;
+        }
+        const params = new URLSearchParams(window.location.search);
+        const raw = params.get("tg_id");
+        return raw ? Number(raw) : null;
+      }
+
+      function translateCoordinates(event) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = viewport.width / rect.width;
+        const scaleY = viewport.height / rect.height;
+        return {
+          x: Math.max(
+            0,
+            Math.min(
+              viewport.width,
+              (event.clientX - rect.left) * scaleX
+            )
+          ),
+          y: Math.max(
+            0,
+            Math.min(
+              viewport.height,
+              (event.clientY - rect.top) * scaleY
+            )
+          ),
+        };
+      }
+
+      function sendMessage(payload) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        try {
+          socket.send(JSON.stringify(payload));
+        } catch (error) {
+          console.error("Failed to send message", error);
+        }
+      }
+
+      function handlePointer(event) {
+        if (!isConnected) {
+          return;
+        }
+        const typeMap = {
+          pointermove: "move",
+          pointerdown: "down",
+          pointerup: "up",
+        };
+        const eventType = typeMap[event.type];
+        if (!eventType) {
+          return;
+        }
+        const coords = translateCoordinates(event);
+        sendMessage({
+          type: "mouse",
+          event: eventType,
+          x: coords.x,
+          y: coords.y,
+          button: event.button,
+          buttons: event.buttons,
+          clickCount: event.detail || 1,
+          modifiers: {
+            alt: event.altKey,
+            ctrl: event.ctrlKey,
+            meta: event.metaKey,
+            shift: event.shiftKey,
+          },
+        });
+        if (event.type === "pointerdown") {
+          canvas.focus();
+          event.preventDefault();
+        }
+        if (event.type === "pointermove" && event.buttons === 0) {
+          // allow hover without pressed buttons
+          event.preventDefault();
+        }
+      }
+
+      function handleWheel(event) {
+        if (!isConnected) {
+          return;
+        }
+        const coords = translateCoordinates(event);
+        sendMessage({
+          type: "mouse",
+          event: "wheel",
+          x: coords.x,
+          y: coords.y,
+          deltaX: event.deltaX,
+          deltaY: event.deltaY,
+          modifiers: {
+            alt: event.altKey,
+            ctrl: event.ctrlKey,
+            meta: event.metaKey,
+            shift: event.shiftKey,
+          },
+        });
+        event.preventDefault();
+      }
+
+      function handleKey(event) {
+        if (!isConnected || !["keydown", "keyup"].includes(event.type)) {
+          return;
+        }
+        if (event.type === "keydown" && event.repeat) {
+          event.preventDefault();
+        }
+        const isTextKey =
+          event.type === "keydown" &&
+          event.key &&
+          event.key.length === 1 &&
+          !event.ctrlKey &&
+          !event.metaKey;
+        sendMessage({
+          type: "keyboard",
+          event: event.type === "keydown" ? "down" : "up",
+          key: event.key,
+          code: event.code,
+          keyCode: event.keyCode || event.which || 0,
+          repeat: event.repeat,
+          isText: isTextKey,
+          text: isTextKey ? event.key : "",
+          modifiers: {
+            alt: event.altKey,
+            ctrl: event.ctrlKey,
+            meta: event.metaKey,
+            shift: event.shiftKey,
+          },
+        });
+        if (isTextKey || ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+          event.preventDefault();
+        }
+      }
+
+      function attachInputListeners() {
+        canvas.addEventListener("pointerdown", handlePointer);
+        canvas.addEventListener("pointermove", handlePointer);
+        canvas.addEventListener("pointerup", handlePointer);
+        canvas.addEventListener("wheel", handleWheel, { passive: false });
+        window.addEventListener("keydown", handleKey, true);
+        window.addEventListener("keyup", handleKey, true);
+      }
+
+      function detachInputListeners() {
+        canvas.removeEventListener("pointerdown", handlePointer);
+        canvas.removeEventListener("pointermove", handlePointer);
+        canvas.removeEventListener("pointerup", handlePointer);
+        canvas.removeEventListener("wheel", handleWheel);
+        window.removeEventListener("keydown", handleKey, true);
+        window.removeEventListener("keyup", handleKey, true);
+      }
+
+      function renderFrame(base64) {
+        if (!base64) {
+          return;
+        }
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        };
+        img.onerror = () => {
+          console.warn("Невозможно отрисовать кадр");
+        };
+        img.src = `data:image/png;base64,${base64}`;
+      }
+
+      function configureViewport(width, height) {
+        viewport = { width, height };
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      function heartbeat() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        sendMessage({ type: "ping" });
+      }
+
+      function stopPing() {
+        if (pingTimer) {
+          clearInterval(pingTimer);
+          pingTimer = null;
+        }
+      }
+
+      async function closeSession() {
+        stopPing();
+        detachInputListeners();
+        isConnected = false;
+        if (socket) {
+          try {
+            socket.close();
+          } catch (error) {
+            console.warn("WebSocket close error", error);
+          }
+          socket = null;
+        }
+        if (sessionId) {
+          try {
+            await fetch(SESSION_CLOSE_ENDPOINT(sessionId), {
+              method: "POST",
+            });
+          } catch (error) {
+            console.warn("Failed to close session", error);
+          }
+          sessionId = null;
+        }
+      }
+
+      function handleSocketMessage(event) {
+        let payload = null;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (error) {
+          console.error("Invalid message", error);
+          return;
+        }
+
+        if (!payload || typeof payload !== "object") {
+          return;
+        }
+
+        switch (payload.type) {
+          case "init":
+            configureViewport(payload.width, payload.height);
+            hideOverlay();
+            setStatus("Сессия готова. Введите логин Яндекс ID.", "");
+            isConnected = true;
+            attachInputListeners();
+            break;
+          case "frame":
+            renderFrame(payload.image);
+            break;
+          case "token":
+            setStatus(TOKEN_SUCCESS_MESSAGE, "success");
+            stopPing();
+            detachInputListeners();
+            isConnected = false;
+            if (tg && typeof tg.sendData === "function") {
+              tg.sendData(
+                JSON.stringify({
+                  provider: "yandex",
+                  access_token: payload.access_token,
+                  expires_in: payload.expires_in ?? null,
+                })
+              );
+              setTimeout(() => tg.close(), 1200);
+            }
+            break;
+          case "error":
+            setStatus(payload.message || "Произошла ошибка.", "error");
+            break;
+          case "pong":
+            break;
+          default:
+            console.debug("Unhandled message", payload);
+        }
+      }
+
+      function handleSocketClose(event) {
+        stopPing();
+        detachInputListeners();
+        isConnected = false;
+        if (!sessionId) {
+          return;
+        }
+        showOverlay("Сессия прервана. Перезапустите, чтобы попробовать снова.");
+        setStatus(
+          "Соединение потеряно. Нажмите «Перезапустить сессию».",
+          "error"
+        );
+      }
+
+      function handleSocketError(event) {
+        console.error("WebSocket error", event);
+        setStatus("Ошибка соединения с браузером.", "error");
+      }
+
+      function connectWebSocket() {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const endpoint = `${protocol}//${window.location.host}/ws/auth/yandex/session/${sessionId}`;
+        socket = new WebSocket(endpoint);
+        socket.addEventListener("message", handleSocketMessage);
+        socket.addEventListener("close", handleSocketClose);
+        socket.addEventListener("error", handleSocketError);
+        socket.addEventListener("open", () => {
+          setStatus("Браузер готов. Авторизуйтесь в Яндексе.", "");
+          hideOverlay();
+          pingTimer = setInterval(heartbeat, 15000);
+        });
+      }
+
+      async function createSession(userId) {
+        setStatus("Запускаем браузер…", "");
+        showOverlay("Инициализируем сессию браузера…");
+        restartBtn.disabled = true;
+        try {
+          const response = await fetch(SESSION_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ telegram_user_id: userId }),
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            const detail =
+              data && (data.detail || data.message)
+                ? data.detail || data.message
+                : "Не удалось запустить браузер.";
+            throw new Error(detail);
+          }
+          const data = await response.json();
+          sessionId = data.session_id;
+          configureViewport(data.viewport_width, data.viewport_height);
+          connectWebSocket();
+          restartBtn.disabled = false;
+        } catch (error) {
+          console.error(error);
+          setStatus(
+            error.message || "Не удалось создать сессию. Попробуйте позже.",
+            "error"
+          );
+          showOverlay("Ошибка запуска. Попробуйте перезапустить.");
+          restartBtn.disabled = false;
+        }
+      }
+
+      async function restartSession() {
+        await closeSession();
+        const userId = getTelegramUserId();
+        if (!userId) {
+          setStatus("Не удалось определить пользователя Telegram.", "error");
+          return;
+        }
+        setStatus("Перезапуск, подождите…", "");
+        await createSession(userId);
+      }
+
+      restartBtn.addEventListener("click", restartSession);
+
+      window.addEventListener("beforeunload", () => {
+        closeSession();
+      });
+
+      async function bootstrap() {
+        const userId = getTelegramUserId();
+        if (!userId) {
+          setStatus("Не удалось определить пользователя Telegram.", "error");
+          showOverlay("Ошибка инициализации Mini App.");
+          restartBtn.disabled = true;
+          return;
+        }
+        await createSession(userId);
+      }
+
+      bootstrap();
+    </script>
+  </body>
+</html>
