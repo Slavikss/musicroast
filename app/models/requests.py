@@ -2,6 +2,7 @@ from typing import Optional, Union
 
 from pydantic import BaseModel, Field
 
+from app.prompts import RoastLevel
 from app.streaming import StreamingProvider
 
 
@@ -42,10 +43,33 @@ class PlaylistInfoRequest(PlaylistRequest):
 class RoastRequest(PlaylistInfoRequest):
     """Запрос для эндпоинта /roast"""
 
+    level: RoastLevel = Field(
+        default=RoastLevel.MEDIUM,
+        description="Уровень прожарки: light / medium / cremation",
+    )
     prompt_version: Optional[str] = Field(
         default=None,
-        description="Версия промпта, зарегистрированная в PromptManager",
+        description="Явная версия промпта (переопределяет level)",
     )
     generate_image: bool = Field(
         default=False, description="Признак необходимости генерации изображения"
     )
+    display_name: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Имя пользователя для шеринг-карточки",
+    )
+
+
+class BattleStartRequest(StreamingCredentials):
+    """Создание батла (веб)."""
+
+    display_name: str = Field(..., min_length=1, max_length=128)
+    level: RoastLevel = Field(default=RoastLevel.MEDIUM)
+
+
+class BattleJoinRequest(StreamingCredentials):
+    """Присоединение к батлу по коду (веб)."""
+
+    code: str = Field(..., min_length=4, max_length=12)
+    display_name: str = Field(..., min_length=1, max_length=128)

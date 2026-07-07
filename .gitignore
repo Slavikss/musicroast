@@ -1,6 +1,4 @@
 .env
-poetry.lock
-static/*
-!static/miniapp/
-!static/miniapp/*
+static/images/
 __pycache__/
+.pytest_cache/

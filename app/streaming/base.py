@@ -33,3 +33,10 @@ class StreamingService:
             status_code=501,
             detail=f"Интеграция со стримингом '{self.provider.value}' пока не реализована",
         )
+
+    def get_account_summary(self) -> Dict[str, Any]:
+        """Возвращает {uid, display_name, liked_count} для валидации токена."""
+        raise HTTPException(
+            status_code=501,
+            detail=f"Интеграция со стримингом '{self.provider.value}' пока не реализована",
+        )

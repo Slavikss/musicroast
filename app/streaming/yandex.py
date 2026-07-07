@@ -7,6 +7,9 @@ from yandex_music.exceptions import YandexMusicError
 from .base import StreamingProvider, StreamingService
 
 
+_TRACKS_CHUNK_SIZE = 250
+
+
 class YandexMusicStreamingService(StreamingService):
     """Интеграция со стримингом Яндекс Музыка."""
 
@@ -23,7 +26,9 @@ class YandexMusicStreamingService(StreamingService):
     def __init__(self, token: str):
         super().__init__(token)
         try:
-            client = YandexMusicClient(token)
+            # init() подтягивает статус аккаунта (client.me) и сразу
+            # отсеивает невалидные токены
+            client = YandexMusicClient(token).init()
         except YandexMusicError as exc:
             raise HTTPException(
                 status_code=401, detail="Неверный или истёкший токен Yandex Music"
@@ -34,6 +39,50 @@ class YandexMusicStreamingService(StreamingService):
                 detail=f"Не удалось инициализировать клиента Yandex Music: {str(exc)}",
             ) from exc
         self.client = client
+
+    def _fetch_tracks_chunked(self, track_ids: List[str]) -> List[Any]:
+        """Забирает полные объекты треков порциями, чтобы не переполнить запрос."""
+        full_tracks: List[Any] = []
+        for offset in range(0, len(track_ids), _TRACKS_CHUNK_SIZE):
+            chunk = track_ids[offset : offset + _TRACKS_CHUNK_SIZE]
+            full_tracks.extend(self.client.tracks(chunk) or [])
+        return full_tracks
+
+    def get_account_summary(self) -> Dict[str, Any]:
+        """Возвращает имя/uid аккаунта и число лайкнутых треков для валидации токена."""
+        try:
+            profile = self.client.me
+            account = getattr(profile, "account", None)
+            display_name = None
+            uid = None
+            if account is not None:
+                display_name = (
+                    getattr(account, "display_name", None)
+                    or getattr(account, "first_name", None)
+                    or getattr(account, "login", None)
+                )
+                uid = getattr(account, "uid", None)
+
+            likes_summary = self.client.users_likes_tracks()
+            liked_count = len(getattr(likes_summary, "tracks", []) or [])
+
+            return {
+                "uid": str(uid) if uid else None,
+                "display_name": display_name or "меломан",
+                "liked_count": liked_count,
+            }
+        except HTTPException:
+            raise
+        except YandexMusicError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="Токен не подошёл: Яндекс Музыка его не приняла",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Не удалось проверить токен: {str(exc)}",
+            ) from exc
 
     def _get_current_user_uid(self) -> str:
         """Возвращает UID текущего пользователя из профиля."""
@@ -149,7 +198,7 @@ class YandexMusicStreamingService(StreamingService):
                 if hasattr(track_short, "timestamp") and track_short.timestamp:
                     added_dates[str(track_short.id)] = str(track_short.timestamp)
 
-            full_tracks = self.client.tracks(track_ids) if track_ids else []
+            full_tracks = self._fetch_tracks_chunked(track_ids) if track_ids else []
             return (
                 full_tracks or [],
                 added_dates,
@@ -214,7 +263,7 @@ class YandexMusicStreamingService(StreamingService):
                 if timestamp:
                     added_dates[str(track_id)] = str(timestamp)
 
-            tracks = self.client.tracks(track_ids) if track_ids else []
+            tracks = self._fetch_tracks_chunked(track_ids) if track_ids else []
 
             owner = getattr(playlist, "owner", None)
             metadata = {

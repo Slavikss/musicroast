@@ -5,19 +5,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class YandexOAuthRequest(BaseModel):
-    """Параметры для получения токена Яндекс Музыки через Mini App."""
-
-    username: str = Field(..., min_length=3, max_length=255, description="Логин Яндекс ID")
-    password: str = Field(..., min_length=3, max_length=255, description="Пароль Яндекс ID")
-    telegram_user_id: int = Field(..., description="Идентификатор пользователя Telegram, инициировавшего запрос")
-    otp: Optional[str] = Field(default=None, description="Код подтверждения (если требуется)")
-    headless: Optional[bool] = Field(
-        default=None,
-        description="Переключение headless-режима браузера. По умолчанию берётся из конфигурации",
-    )
-
-
 class StoredTokenResponse(BaseModel):
     """Ответ с сохранённым токеном."""
 
@@ -28,15 +15,41 @@ class StoredTokenResponse(BaseModel):
     )
 
 
-class YandexInteractiveSessionRequest(BaseModel):
-    """Запрос на создание интерактивной сессии авторизации."""
+class AccountSummary(BaseModel):
+    """Краткая информация об аккаунте стриминга после валидации токена."""
 
-    telegram_user_id: int = Field(..., description="Идентификатор пользователя Telegram")
+    uid: Optional[str] = None
+    display_name: str = "меломан"
+    liked_count: int = 0
 
 
-class YandexInteractiveSessionResponse(BaseModel):
-    """Ответ при создании интерактивной сессии."""
+class TokenValidationRequest(BaseModel):
+    """Сырое сообщение пользователя: URL после редиректа, фрагмент или голый токен."""
 
-    session_id: str = Field(..., description="Уникальный идентификатор сессии")
-    viewport_width: int = Field(..., description="Ширина виртуального окна браузера")
-    viewport_height: int = Field(..., description="Высота виртуального окна браузера")
+    provider: str = Field(default="yandex")
+    raw_input: str = Field(..., min_length=1, max_length=8192, repr=False)
+
+
+class TokenValidationResponse(BaseModel):
+    access_token: str = Field(..., repr=False)
+    expires_in: Optional[int] = None
+    account: AccountSummary
+
+
+class DeviceAuthStartResponse(BaseModel):
+    """Ответ на старт OAuth Device Flow."""
+
+    session_id: str
+    verification_url: str
+    user_code: str
+    expires_in: int
+    interval: int
+
+
+class DeviceAuthStatusResponse(BaseModel):
+    """Статус device-auth сессии."""
+
+    status: str = Field(..., description="pending | ready | expired | cancelled")
+    access_token: Optional[str] = Field(default=None, repr=False)
+    expires_in: Optional[int] = None
+    account: Optional[AccountSummary] = None

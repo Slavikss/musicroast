@@ -1,10 +1,19 @@
 from .auth import (
+    AccountSummary,
+    DeviceAuthStartResponse,
+    DeviceAuthStatusResponse,
     StoredTokenResponse,
-    YandexInteractiveSessionRequest,
-    YandexInteractiveSessionResponse,
-    YandexOAuthRequest,
+    TokenValidationRequest,
+    TokenValidationResponse,
 )
-from .requests import PlaylistInfoRequest, PlaylistRequest, RoastRequest, StreamingCredentials
+from .requests import (
+    BattleJoinRequest,
+    BattleStartRequest,
+    PlaylistInfoRequest,
+    PlaylistRequest,
+    RoastRequest,
+    StreamingCredentials,
+)
 from .track import Track
 
 __all__ = [
@@ -13,8 +22,12 @@ __all__ = [
     "PlaylistRequest",
     "PlaylistInfoRequest",
     "RoastRequest",
-    "YandexOAuthRequest",
-    "YandexInteractiveSessionRequest",
-    "YandexInteractiveSessionResponse",
+    "BattleStartRequest",
+    "BattleJoinRequest",
+    "AccountSummary",
     "StoredTokenResponse",
+    "TokenValidationRequest",
+    "TokenValidationResponse",
+    "DeviceAuthStartResponse",
+    "DeviceAuthStatusResponse",
 ]
