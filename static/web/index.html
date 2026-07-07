@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MusicRoast — прожарка музыкального вкуса</title>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --card: #1a1a22;
+    --card2: #22222c;
+    --text: #eaeaf0;
+    --muted: #9a9aa8;
+    --accent: #ff5c1a;
+    --accent2: #ffb01a;
+    --ok: #3ddc84;
+    --err: #ff4d5e;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  main { width: 100%; max-width: 640px; }
+  h1 {
+    font-size: 34px; margin: 8px 0 4px; letter-spacing: -0.5px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .tagline { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    padding: 20px; margin-bottom: 16px; border: 1px solid #2a2a36;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 18px; }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 14px; margin-right: 8px;
+  }
+  button {
+    background: var(--accent); border: 0; color: #fff; cursor: pointer;
+    padding: 12px 20px; font-size: 16px; font-weight: 600;
+    border-radius: 10px; transition: transform .06s, opacity .2s;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:disabled { opacity: .45; cursor: default; transform: none; }
+  button.secondary { background: var(--card2); color: var(--text); border: 1px solid #34343f; }
+  textarea, input[type=text], select {
+    width: 100%; background: var(--card2); color: var(--text);
+    border: 1px solid #34343f; border-radius: 10px; padding: 10px 12px;
+    font-size: 15px; margin: 6px 0;
+  }
+  textarea { min-height: 72px; resize: vertical; }
+  .code-badge {
+    font: 700 32px/1 ui-monospace, monospace; letter-spacing: 4px;
+    background: var(--card2); border: 1px dashed var(--accent);
+    padding: 14px 18px; border-radius: 12px; display: inline-block;
+    margin: 10px 0; cursor: pointer; user-select: all;
+  }
+  .banner { padding: 12px 14px; border-radius: 10px; margin: 10px 0; display: none; }
+  .banner.ok { background: rgba(61,220,132,.12); color: var(--ok); display: block; }
+  .banner.err { background: rgba(255,77,94,.12); color: var(--err); display: block; }
+  .levels { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .levels label {
+    flex: 1 1 30%; text-align: center; padding: 12px 8px;
+    background: var(--card2); border: 1px solid #34343f; border-radius: 10px;
+    cursor: pointer; font-size: 14px;
+  }
+  .levels input { display: none; }
+  .levels input:checked + span { color: var(--accent2); font-weight: 700; }
+  .levels label:has(input:checked) { border-color: var(--accent); background: rgba(255,92,26,.08); }
+  .roast-result { white-space: pre-wrap; }
+  .roast-result b { color: var(--accent2); }
+  .scoreline {
+    display: flex; align-items: baseline; gap: 12px; margin: 4px 0 14px;
+    flex-wrap: wrap;
+  }
+  .score { font-size: 44px; font-weight: 800; color: var(--accent); }
+  .diagnosis { color: var(--muted); font-style: italic; }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); font-size: 14px; }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
+  img.cover { width: 100%; border-radius: var(--radius); margin-top: 14px; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; vertical-align: -3px;
+    border: 2px solid rgba(255,255,255,.25); border-top-color: #fff;
+    border-radius: 50%; animation: spin .8s linear infinite; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .checkline { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+  .battle-code { font: 700 24px/1 ui-monospace, monospace; color: var(--accent2); letter-spacing: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🔥 MusicRoast</h1>
+  <p class="tagline">Прожарка музыкального вкуса — резко и строго по фактам твоей библиотеки.</p>
+
+  <!-- ШАГ 1: вход -->
+  <section class="card" id="auth-card">
+    <h2><span class="step-num">1</span>Вход в Яндекс Музыку</h2>
+    <div id="auth-initial">
+      <button id="btn-login">Войти через Яндекс</button>
+      <details>
+        <summary>Или вставь токен/ссылку вручную</summary>
+        <textarea id="manual-token" placeholder="Ссылка после редиректа (music.yandex.ru/#access_token=...) или сам токен y0_..."></textarea>
+        <button class="secondary" id="btn-validate">Проверить</button>
+        <p class="muted">Получить ссылку: <a id="oauth-link" href="#" target="_blank" rel="noopener">авторизация Яндекса</a> → после входа скопируй адресную строку.</p>
+      </details>
+    </div>
+    <div id="auth-device" class="hidden">
+      <p>Введи этот код на странице Яндекса:</p>
+      <div class="code-badge" id="device-code" title="Нажми, чтобы скопировать">—</div>
+      <div class="row">
+        <a id="device-link" href="#" target="_blank" rel="noopener"><button>Открыть Яндекс</button></a>
+        <button class="secondary" id="btn-cancel-auth">Отмена</button>
+      </div>
+      <p class="muted"><span class="spinner"></span>Жду подтверждения входа...</p>
+    </div>
+    <div class="banner" id="auth-banner"></div>
+  </section>
+
+  <!-- ШАГ 2: настройки -->
+  <section class="card hidden" id="setup-card">
+    <h2><span class="step-num">2</span>Настройки прожарки</h2>
+    <input type="text" id="display-name" placeholder="Твоё имя (для карточки и батла)" maxlength="64">
+    <select id="playlist-select"><option value="liked">❤️ Мне нравится</option></select>
+    <div class="levels">
+      <label><input type="radio" name="level" value="light"><span>🌤 Лёгкая</span></label>
+      <label><input type="radio" name="level" value="medium" checked><span>🔥 Средняя</span></label>
+      <label><input type="radio" name="level" value="cremation"><span>☠️ Кремация</span></label>
+    </div>
+    <div class="checkline">
+      <input type="checkbox" id="gen-image"><label for="gen-image">🖼 Сгенерировать обложку позора (дольше)</label>
+    </div>
+    <button id="btn-roast">🔥 Прожарить</button>
+    <div class="banner" id="roast-banner"></div>
+  </section>
+
+  <!-- РЕЗУЛЬТАТ -->
+  <section class="card hidden" id="result-card">
+    <h2>Вердикт</h2>
+    <div class="scoreline">
+      <span class="score" id="res-score">—</span>
+      <span class="diagnosis" id="res-diagnosis"></span>
+    </div>
+    <div class="roast-result" id="res-text"></div>
+    <img class="cover hidden" id="res-image" alt="Обложка позора">
+    <div class="row" style="margin-top:14px">
+      <button class="secondary" id="btn-again">🔁 Ещё раз</button>
+      <button class="secondary" id="btn-battle-start">⚔️ Создать батл</button>
+    </div>
+  </section>
+
+  <!-- БАТЛ -->
+  <section class="card hidden" id="battle-card">
+    <h2>⚔️ Батл</h2>
+    <div id="battle-own" class="hidden">
+      <p>Код вызова: <span class="battle-code" id="battle-code">—</span></p>
+      <p class="muted">Скинь другу ссылку — как только он прожарится, тут появится вердикт:</p>
+      <input type="text" id="battle-link" readonly>
+      <p class="muted"><span class="spinner"></span>Жду соперника...</p>
+    </div>
+    <div id="battle-join" class="hidden">
+      <p>Тебя вызвали на батл! Сначала пройди шаги 1–2, потом жми:</p>
+      <button id="btn-battle-join" disabled>⚔️ Принять вызов</button>
+    </div>
+    <div class="roast-result" id="battle-result"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  let accessToken = null;      // живёт только в памяти вкладки
+  let deviceSession = null;
+  let devicePollTimer = null;
+  let battlePollTimer = null;
+  const joinCode = new URLSearchParams(location.search).get("battle");
+
+  const $ = (id) => document.getElementById(id);
+  const show = (el) => el.classList.remove("hidden");
+  const hide = (el) => el.classList.add("hidden");
+
+  function banner(el, text, kind) {
+    el.textContent = text;
+    el.className = "banner " + kind;
+  }
+
+  function renderMiniMd(target, text) {
+    target.innerHTML = "";
+    const parts = String(text || "").split(/\*\*/);
+    parts.forEach((part, i) => {
+      const node = i % 2 ? document.createElement("b") : document.createTextNode(part);
+      if (i % 2) { node.textContent = part; target.appendChild(node); }
+      else target.appendChild(node);
+    });
+  }
+
+  async function api(path, opts) {
+    const res = await fetch(path, Object.assign({
+      headers: { "Content-Type": "application/json" }
+    }, opts));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+    return data;
+  }
+
+  // ---------------------------------------------------------------- вход
+  fetch("/auth/yandex/url").then(r => r.json())
+    .then(d => { $("oauth-link").href = d.auth_url; }).catch(() => {});
+
+  $("btn-login").onclick = async () => {
+    try {
+      $("btn-login").disabled = true;
+      deviceSession = await api("/auth/device/start", { method: "POST" });
+      $("device-code").textContent = deviceSession.user_code;
+      $("device-link").href = deviceSession.verification_url;
+      hide($("auth-initial")); show($("auth-device"));
+      devicePollTimer = setInterval(pollDevice, (deviceSession.interval || 5) * 1000);
+    } catch (e) {
+      banner($("auth-banner"), "Не удалось запустить вход: " + e.message, "err");
+      $("btn-login").disabled = false;
+    }
+  };
+
+  $("device-code").onclick = () => {
+    navigator.clipboard && navigator.clipboard.writeText($("device-code").textContent);
+  };
+
+  $("btn-cancel-auth").onclick = () => stopDeviceFlow(true);
+
+  function stopDeviceFlow(reset) {
+    clearInterval(devicePollTimer);
+    devicePollTimer = null;
+    if (reset) {
+      hide($("auth-device")); show($("auth-initial"));
+      $("btn-login").disabled = false;
+    }
+  }
+
+  async function pollDevice() {
+    if (!deviceSession) return;
+    try {
+      const st = await api("/auth/device/" + deviceSession.session_id);
+      if (st.status === "ready") {
+        stopDeviceFlow(false);
+        onAuthorized(st.access_token, st.account);
+      } else if (st.status === "expired" || st.status === "cancelled") {
+        stopDeviceFlow(true);
+        banner($("auth-banner"), "Код протух — попробуй ещё раз.", "err");
+      }
+    } catch (e) { /* пропускаем разовые сбои */ }
+  }
+
+  $("btn-validate").onclick = async () => {
+    try {
+      $("btn-validate").disabled = true;
+      const data = await api("/auth/validate", {
+        method: "POST",
+        body: JSON.stringify({ provider: "yandex", raw_input: $("manual-token").value })
+      });
+      onAuthorized(data.access_token, data.account);
+    } catch (e) {
+      banner($("auth-banner"), e.message, "err");
+    } finally {
+      $("btn-validate").disabled = false;
+    }
+  };
+
+  function onAuthorized(token, account) {
+    accessToken = token;
+    hide($("auth-device")); hide($("auth-initial"));
+    const name = (account && account.display_name) || "меломан";
+    const liked = (account && account.liked_count) || 0;
+    banner($("auth-banner"), `Привет, ${name}! Вижу ${liked} лайкнутых треков.`, "ok");
+    $("display-name").value = $("display-name").value || name;
+    show($("setup-card"));
+    loadPlaylists();
+    if (joinCode) {
+      show($("battle-card")); show($("battle-join"));
+      $("btn-battle-join").disabled = false;
+    }
+  }
+
+  async function loadPlaylists() {
+    try {
+      const data = await api("/streaming/playlists", {
+        method: "POST",
+        body: JSON.stringify({ provider: "yandex", access_token: accessToken })
+      });
+      const select = $("playlist-select");
+      select.innerHTML = "";
+      (data.playlists || []).forEach(pl => {
+        if (!pl.track_count) return;
+        const opt = document.createElement("option");
+        opt.value = pl.kind;
+        opt.textContent = (pl.is_liked ? "❤️ " : "💿 ") + pl.title + " (" + pl.track_count + ")";
+        select.appendChild(opt);
+      });
+      if (!select.children.length) {
+        select.innerHTML = '<option value="liked">❤️ Мне нравится</option>';
+      }
+    } catch (e) { /* оставляем дефолт */ }
+  }
+
+  // -------------------------------------------------------------- прожарка
+  async function doRoast() {
+    const btn = $("btn-roast");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Читаю библиотеку и жарю...';
+    banner($("roast-banner"), "", ""); $("roast-banner").className = "banner";
+    try {
+      const data = await api("/roast", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "yandex",
+          access_token: accessToken,
+          playlist_kind: $("playlist-select").value || "liked",
+          level: document.querySelector('input[name=level]:checked').value,
+          generate_image: $("gen-image").checked,
+          display_name: $("display-name").value || null
+        })
+      });
+      $("res-score").textContent = data.score + "/10";
+      $("res-diagnosis").textContent = data.diagnosis || "";
+      renderMiniMd($("res-text"), data.roast);
+      if (data.image_url) {
+        $("res-image").src = data.image_url; show($("res-image"));
+      } else hide($("res-image"));
+      show($("result-card"));
+      $("result-card").scrollIntoView({ behavior: "smooth" });
+    } catch (e) {
+      banner($("roast-banner"), e.message, "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔥 Прожарить";
+    }
+  }
+  $("btn-roast").onclick = doRoast;
+  $("btn-again").onclick = doRoast;
+
+  // ----------------------------------------------------------------- батл
+  $("btn-battle-start").onclick = async () => {
+    const btn = $("btn-battle-start");
+    btn.disabled = true;
+    try {
+      const data = await api("/battle/start", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "yandex",
+          access_token: accessToken,
+          display_name: $("display-name").value || "аноним",
+          level: document.querySelector('input[name=level]:checked').value
+        })
+      });
+      $("battle-code").textContent = data.code;
+      $("battle-link").value = location.origin + "/?battle=" + data.code;
+      show($("battle-card")); show($("battle-own"));
+      $("battle-card").scrollIntoView({ behavior: "smooth" });
+      battlePollTimer = setInterval(() => pollBattle(data.code), 5000);
+    } catch (e) {
+      alert("Батл не создался: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  async function pollBattle(code) {
+    try {
+      const st = await api("/battle/" + code);
+      if (st.status === "done" && st.result) {
+        clearInterval(battlePollTimer);
+        renderMiniMd($("battle-result"), st.result);
+        document.querySelector("#battle-own .muted:last-of-type").textContent = "Бой окончен!";
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  $("btn-battle-join").onclick = async () => {
+    const btn = $("btn-battle-join");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Жарю тебя и сужу бой...';
+    try {
+      const data = await api("/battle/join", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "yandex",
+          access_token: accessToken,
+          code: joinCode,
+          display_name: $("display-name").value || "аноним"
+        })
+      });
+      renderMiniMd($("battle-result"), data.result || "");
+      $("battle-card").scrollIntoView({ behavior: "smooth" });
+    } catch (e) {
+      alert("Не вышло: " + e.message);
+      btn.disabled = false;
+    } finally {
+      btn.textContent = "⚔️ Принять вызов";
+    }
+  };
+
+  if (joinCode) { show($("battle-card")); show($("battle-join")); }
+})();
+</script>
+</body>
+</html>
