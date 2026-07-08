@@ -194,7 +194,7 @@ def create_app() -> FastAPI:
                 status_code=500, detail=f"Не удалось выполнить прожарку: {exc}"
             ) from exc
 
-        prepared_stats = result.get("stats") or {}
+        taste = result.get("taste_diagnosis") or {}
         record = RoastRecord(
             roast_id="",
             user_key=f"web:{request.display_name or 'аноним'}",
@@ -207,6 +207,7 @@ def create_app() -> FastAPI:
             sample_lines="",
             playlist_title=result.get("playlist", {}).get("title", ""),
             level=result.get("level", RoastLevel.MEDIUM.value),
+            archetype=taste.get("archetype", ""),
         )
         result["roast_id"] = await roast_registry.create(record)
         return JSONResponse(content=result)
@@ -223,6 +224,7 @@ def create_app() -> FastAPI:
                 "display_name": record.display_name,
                 "score": record.score,
                 "diagnosis": record.diagnosis,
+                "archetype": record.archetype,
                 "first_punch": first_punch,
                 "level": record.level,
             }

@@ -29,11 +29,16 @@ class BattleSide:
     stats_block: str
     sample_lines: str
     chat_id: Optional[int] = None  # куда слать результат (None для веба)
+    archetype: str = ""  # детерминированный архетип из диагноз-ядра
 
     def dossier(self) -> str:
+        archetype_line = (
+            f"Архетип (вычислен точно): {self.archetype}\n" if self.archetype else ""
+        )
         return (
             f"Имя: {self.display_name}\n"
             f"Оценка вкуса: {self.score}/10\n"
+            f"{archetype_line}"
             f"Диагноз: {self.diagnosis}\n"
             f"{self.stats_block}\n\n"
             f"Топ треков:\n{self.sample_lines}"

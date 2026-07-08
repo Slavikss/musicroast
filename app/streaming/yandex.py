@@ -1,10 +1,14 @@
-from typing import Any, Dict, List, Union
+import logging
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException
 from yandex_music import Client as YandexMusicClient
 from yandex_music.exceptions import YandexMusicError
 
 from .base import StreamingProvider, StreamingService
+from .snapshot import DeclaredItem, RawTasteSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 _TRACKS_CHUNK_SIZE = 250
@@ -221,6 +225,107 @@ class YandexMusicStreamingService(StreamingService):
             raise HTTPException(
                 status_code=500, detail=f"Ошибка Yandex Music API: {str(exc)}"
             ) from exc
+
+    # ------------------------------------------------------ taste snapshot
+
+    def get_taste_snapshot(self) -> RawTasteSnapshot:
+        """Сырой снапшот вкуса: лайки (спина) + чарт + заявленное + дизлайки.
+
+        Каждая группа вызовов независима: отказ одной оставляет поле None,
+        соответствующая ось диагноза просто не сыграет.
+        """
+        liked_tracks, liked_added, _ = self.get_liked_tracks()
+        snapshot = RawTasteSnapshot(
+            liked_tracks=liked_tracks, liked_added=liked_added
+        )
+
+        # Чарт — ось обскурности
+        try:
+            chart_info = self.client.chart()
+            positions: Dict[str, int] = {}
+            chart_playlist = getattr(chart_info, "chart", None)
+            for short in getattr(chart_playlist, "tracks", None) or []:
+                track = getattr(short, "track", None)
+                chart_meta = getattr(short, "chart", None)
+                if track is not None and getattr(track, "id", None) is not None:
+                    positions[str(track.id)] = getattr(chart_meta, "position", 0) or 0
+            snapshot.chart_positions = positions
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: chart() failed", exc_info=True)
+
+        # Заявленное — pins и имена плейлистов (ось разрыва)
+        try:
+            pins_list = self.client.pins()
+            declared: List[DeclaredItem] = []
+            for pin in getattr(pins_list, "pins", None) or []:
+                data = getattr(pin, "data", None)
+                name = getattr(data, "name", None) or getattr(data, "title", None)
+                kind = (getattr(pin, "type", "") or "").replace("_item", "")
+                if name:
+                    declared.append(DeclaredItem(kind=kind or "unknown", name=str(name)))
+            snapshot.pins = declared
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: pins() failed", exc_info=True)
+
+        try:
+            playlists = self.client.users_playlists_list()
+            snapshot.playlist_titles = [
+                str(pl.title) for pl in playlists or [] if getattr(pl, "title", None)
+            ]
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_playlists_list() failed", exc_info=True)
+
+        # Граница вкуса — дизлайки (ось лицемерия)
+        try:
+            disliked_artists = self.client.users_dislikes_artists()
+            snapshot.disliked_artist_names = [
+                str(a.name) for a in disliked_artists or [] if getattr(a, "name", None)
+            ]
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_dislikes_artists() failed", exc_info=True)
+
+        try:
+            disliked = self.client.users_dislikes_tracks()
+            short_ids = list(getattr(disliked, "tracks_ids", None) or [])
+            if short_ids and len(short_ids) <= 300:
+                artists: List[str] = []
+                genres: List[str] = []
+                for track in self._fetch_tracks_chunked(short_ids):
+                    for artist in getattr(track, "artists", None) or []:
+                        if getattr(artist, "name", None):
+                            artists.append(str(artist.name))
+                    for album in getattr(track, "albums", None) or []:
+                        if getattr(album, "genre", None):
+                            genres.append(str(album.genre))
+                snapshot.disliked_track_artists = artists
+                snapshot.disliked_genres = genres
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_dislikes_tracks() failed", exc_info=True)
+
+        return snapshot
+
+    def get_artist_popularity(self, artist_ids: List[int]) -> Dict[int, Optional[int]]:
+        """last_month_listeners по top-K артистам головы. Лениво и дозированно."""
+        popularity: Dict[int, Optional[int]] = {}
+        for artist_id in artist_ids[:5]:
+            try:
+                info = self.client.artists_brief_info(artist_id)
+                stats = getattr(info, "stats", None)
+                popularity[artist_id] = getattr(stats, "last_month_listeners", None)
+            except Exception:  # noqa: BLE001
+                popularity[artist_id] = None
+        return popularity
+
+    def fetch_lyrics(self, track_id: str) -> Optional[str]:
+        """Текст трека (формат TEXT) или None. Зовётся только за гейтом."""
+        try:
+            plain_id = str(track_id).split(":", 1)[0]
+            lyrics = self.client.tracks_lyrics(plain_id, format_="TEXT")
+            if lyrics is None:
+                return None
+            return lyrics.fetch_lyrics()
+        except Exception:  # noqa: BLE001
+            return None
 
     def get_playlist_tracks(
         self, playlist_kind: Union[int, str], owner_id: Union[str, int] = "me"

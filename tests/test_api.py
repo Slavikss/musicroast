@@ -15,7 +15,9 @@ FAKE_ROAST = RoastOutcome(
 
 @pytest.fixture()
 def client(monkeypatch):
-    def fake_generate_roast(self, tracks, stats_block=None, level=None, prompt_version=None):
+    def fake_generate_roast(
+        self, tracks, stats_block=None, level=None, prompt_version=None, **kwargs
+    ):
         return FAKE_ROAST
 
     def fake_battle_verdict(self, dossier_a, dossier_b):
@@ -23,6 +25,13 @@ def client(monkeypatch):
 
     monkeypatch.setattr(GeminiRoaster, "generate_roast", fake_generate_roast)
     monkeypatch.setattr(GeminiRoaster, "generate_battle_verdict", fake_battle_verdict)
+
+    # Лирик-слой не должен ходить в реальный Gemini из тестов
+    import app.services.music_roast as music_roast_module
+
+    monkeypatch.setattr(
+        music_roast_module, "extract_lyric_theme", lambda *a, **kw: None
+    )
 
     from app import create_app
 
@@ -78,6 +87,16 @@ def test_roast_flow_and_teaser(client):
     assert data["roast_id"]
     assert data["stats"]["total_tracks"] > 0
     assert len(data["shame_facts"]) == 3
+
+    # Диагноз-ядро: мок-библиотека проходит гейты и получает ровно один архетип
+    taste = data["taste_diagnosis"]
+    assert taste is not None
+    assert taste["archetype"]
+    assert len(taste["evidence"]) == 3
+    assert taste["snapshot_hash"]
+    assert data["gate_status"]["likes_gate"] is True
+    # axis_scores наружу не выходят — только внутренний дебаг
+    assert "axis_scores" not in taste
 
     teaser = client.get(f"/roast/{data['roast_id']}/teaser")
     assert teaser.status_code == 200

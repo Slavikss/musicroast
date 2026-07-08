@@ -149,6 +149,10 @@
       <span class="score" id="res-score">—</span>
       <span class="diagnosis" id="res-diagnosis"></span>
     </div>
+    <div id="res-archetype" class="hidden" style="margin:0 0 12px">
+      <div>🩺 Архетип: <b id="res-archetype-name"></b></div>
+      <div class="muted" id="res-evidence"></div>
+    </div>
     <div class="roast-result" id="res-text"></div>
     <img class="cover hidden" id="res-image" alt="Обложка позора">
     <div class="row" style="margin-top:14px">
@@ -329,6 +333,15 @@
       });
       $("res-score").textContent = data.score + "/10";
       $("res-diagnosis").textContent = data.diagnosis || "";
+      const dx = data.taste_diagnosis;
+      if (dx && dx.archetype) {
+        $("res-archetype-name").textContent = dx.archetype;
+        $("res-evidence").textContent =
+          (dx.evidence && dx.evidence.length) ? "Улики: " + dx.evidence.join(" · ") : "";
+        show($("res-archetype"));
+      } else {
+        hide($("res-archetype"));
+      }
       renderMiniMd($("res-text"), data.roast);
       if (data.image_url) {
         $("res-image").src = data.image_url; show($("res-image"));
