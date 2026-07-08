@@ -30,6 +30,12 @@ from app.services.device_auth import (
     DeviceSession,
     device_auth_manager,
 )
+from app.services.diagnosis import evidence_lines
+from app.services.diagnosis_registry import (
+    DiagnosisRecord,
+    diagnosis_registry,
+    taste_diff,
+)
 from app.services.roast_registry import RoastRecord, roast_registry
 from app.streaming import StreamingProvider
 from app.token_storage import token_storage
@@ -53,6 +59,7 @@ class LastRoast:
     playlist_kind: str
     playlist_title: str
     level: RoastLevel
+    archetype: str = ""
 
 
 def _esc(value: object) -> str:
@@ -170,9 +177,13 @@ def create_dispatcher(
             return
 
         first_punch = record.text.strip().splitlines()[0] if record.text else ""
+        archetype_line = (
+            f"🩺 Архетип: <b>{_esc(record.archetype)}</b>\n" if record.archetype else ""
+        )
         teaser = (
             f"👀 <b>{_esc(record.display_name)}</b> получил прожарку:\n\n"
             f"Вкус: <b>{record.score}/10</b>\n"
+            f"{archetype_line}"
             f"Диагноз: <i>{_esc(record.diagnosis)}</i>\n\n"
             f"«{_esc(first_punch)}»\n"
             f"▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒\n"
@@ -530,9 +541,11 @@ def create_dispatcher(
             sample_lines=prepared.sample_lines(),
             playlist_title=prepared.metadata.get("title", ""),
             level=level.value,
+            archetype=prepared.diagnosis.archetype if prepared.diagnosis else "",
         )
         roast_id = await roast_registry.create(record)
 
+        diagnosis = prepared.diagnosis
         last = LastRoast(
             roast_id=roast_id,
             text=outcome.text,
@@ -543,8 +556,32 @@ def create_dispatcher(
             playlist_kind=playlist_kind,
             playlist_title=prepared.metadata.get("title", ""),
             level=level,
+            archetype=diagnosis.archetype if diagnosis else "",
         )
         last_roasts[user_id] = last
+
+        # Диагноз-ядро: append-only запись + дифф с прошлым снапшотом
+        diff_line = None
+        if diagnosis is not None:
+            previous = await diagnosis_registry.previous_for_user(
+                str(user_id), diagnosis.snapshot_hash
+            )
+            diff_line = taste_diff(
+                previous, diagnosis.archetype, diagnosis.axis, diagnosis.axis_scores
+            )
+            await diagnosis_registry.append(
+                DiagnosisRecord(
+                    snapshot_hash=diagnosis.snapshot_hash,
+                    user_key=str(user_id),
+                    archetype=diagnosis.archetype,
+                    axis=diagnosis.axis,
+                    verdict_phrase=outcome.diagnosis or diagnosis.archetype,
+                    evidence=tuple(evidence_lines(diagnosis)),
+                    axis_scores=diagnosis.axis_scores,
+                    gate_status=diagnosis.gate_status.as_dict(),
+                    lyric_theme=diagnosis.lyric_theme,
+                )
+            )
 
         try:
             await status_msg.delete()
@@ -557,12 +594,21 @@ def create_dispatcher(
             f"🔥 <b>ПРОЖАРКА: {_esc(display_name)}</b>",
             f"Уровень: {_esc(LEVEL_TITLES[level])}",
             f"Вкус: <b>{outcome.score}/10</b>",
-            f"Диагноз: <i>{_esc(outcome.diagnosis)}</i>",
         ]
+        if diagnosis is not None:
+            card_lines.append(f"🩺 Архетип: <b>{_esc(diagnosis.archetype)}</b>")
+        card_lines.append(f"Диагноз: <i>{_esc(outcome.diagnosis)}</i>")
+        if diagnosis is not None and diagnosis.evidence:
+            card_lines.append(
+                "Улики: " + " · ".join(_esc(line) for line in evidence_lines(diagnosis))
+            )
         if outcome.shame_facts:
             card_lines.append("")
             card_lines.append("Топ позора:")
             card_lines.extend(f"• {_esc(fact)}" for fact in outcome.shame_facts)
+        if diff_line:
+            card_lines.append("")
+            card_lines.append(f"📈 {_esc(diff_line)}")
         await status_msg.answer(
             "\n".join(card_lines),
             parse_mode="HTML",
@@ -615,6 +661,7 @@ def create_dispatcher(
             diagnosis=last.diagnosis,
             stats_block=last.stats_block,
             sample_lines=last.sample_lines,
+            archetype=last.archetype,
         )
         friend_side = BattleSide(
             display_name=friend.display_name,
@@ -622,6 +669,7 @@ def create_dispatcher(
             diagnosis=friend.diagnosis,
             stats_block=friend.stats_block,
             sample_lines=friend.sample_lines,
+            archetype=friend.archetype,
         )
 
         try:
@@ -674,6 +722,7 @@ def create_dispatcher(
             stats_block=last.stats_block,
             sample_lines=last.sample_lines,
             chat_id=user_id,
+            archetype=last.archetype,
         )
         try:
             battle = await battle_registry.join(code, side)
@@ -794,6 +843,7 @@ def create_dispatcher(
             stats_block=last.stats_block,
             sample_lines=last.sample_lines,
             chat_id=user.id,
+            archetype=last.archetype,
         )
         battle = await battle_registry.create(side, last.level.value)
         link = _deep_link(f"battle_{battle.code}")

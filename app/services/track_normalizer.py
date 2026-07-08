@@ -63,6 +63,11 @@ class TrackNormalizer:
                 artists = [
                     a.name for a in (src_artists or []) if getattr(a, "name", None)
                 ]
+                artist_ids = [
+                    a.id
+                    for a in (src_artists or [])
+                    if isinstance(getattr(a, "id", None), int)
+                ]
 
                 album_year, album_genre = TrackNormalizer._extract_album_info(t)
                 if (
@@ -80,12 +85,28 @@ class TrackNormalizer:
                         added_at[str(track_id)]
                     )
 
+                source = getattr(t, "track", None) or t
+                lyrics_available = bool(getattr(source, "lyrics_available", False))
+                lyrics_info = getattr(source, "lyrics_info", None)
+                if lyrics_info is not None:
+                    lyrics_available = lyrics_available or bool(
+                        getattr(lyrics_info, "has_available_text_lyrics", False)
+                    )
+
                 track_model = Track(
                     title=title or "Unknown",
                     artists=artists or ["Unknown"],
                     year=album_year,
                     genre=album_genre,
                     added_at=added_date,
+                    track_id=str(track_id) if track_id is not None else None,
+                    artist_ids=artist_ids,
+                    duration_ms=getattr(source, "duration_ms", None),
+                    explicit=bool(
+                        getattr(source, "explicit", None)
+                        or getattr(source, "content_warning", "") == "explicit"
+                    ),
+                    lyrics_available=lyrics_available,
                 )
                 compact.append(track_model)
 

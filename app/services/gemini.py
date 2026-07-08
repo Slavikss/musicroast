@@ -152,8 +152,12 @@ class GeminiRoaster:
         tracks: List[Track],
         stats_block: Optional[str],
         track_list_header: str,
+        diagnosis_block: Optional[str] = None,
     ) -> str:
         lines: List[str] = []
+        if diagnosis_block:
+            lines.append(diagnosis_block)
+            lines.append("")
         if stats_block:
             lines.append(stats_block)
             lines.append("")
@@ -176,11 +180,12 @@ class GeminiRoaster:
         stats_block: Optional[str] = None,
         level: RoastLevel = RoastLevel.MEDIUM,
         prompt_version: Optional[str] = None,
+        diagnosis_block: Optional[str] = None,
     ) -> RoastOutcome:
         """Генерация прожарки: текст + структурированный вердикт."""
         template = self.prompt_manager.get_template(prompt_version or level.value)
         user_prompt = self._build_user_prompt(
-            tracks, stats_block, template.track_list_header
+            tracks, stats_block, template.track_list_header, diagnosis_block
         )
 
         try:

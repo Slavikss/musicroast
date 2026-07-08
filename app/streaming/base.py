@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException
+
+from .snapshot import RawTasteSnapshot
 
 
 class StreamingProvider(str, Enum):
@@ -40,3 +42,18 @@ class StreamingService:
             status_code=501,
             detail=f"Интеграция со стримингом '{self.provider.value}' пока не реализована",
         )
+
+    def get_taste_snapshot(self) -> RawTasteSnapshot:
+        """Сырой снапшот вкуса для диагноз-ядра (лайки + чарт + pins + дизлайки)."""
+        raise HTTPException(
+            status_code=501,
+            detail=f"Интеграция со стримингом '{self.provider.value}' пока не реализована",
+        )
+
+    def get_artist_popularity(self, artist_ids: List[int]) -> Dict[int, Optional[int]]:
+        """Слушатели за месяц по артистам (только для головы HHI, лениво)."""
+        return {}
+
+    def fetch_lyrics(self, track_id: str) -> Optional[str]:
+        """Текст трека или None. Зовётся только за лирик-гейтом."""
+        return None
