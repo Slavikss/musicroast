@@ -1,7 +1,9 @@
 """Append-only реестр диагнозов: git-коммит вкуса, а не Grafana-панель.
 
-Ключ — snapshot_hash: тот же снапшот → тот же record без пересчёта ядра.
-Записи не мутируются и не удаляются (в пределах жизни процесса).
+Ключ — snapshot_hash: тот же снапшот → тот же record (первый приём у доктора).
+Записи не мутируются и не удаляются (в пределах жизни процесса). Название
+болезни у каждого пациента своё (его придумывает LLM), поэтому дифф во
+времени идёт по стадии (severity) и скору, а не по названию.
 """
 
 from __future__ import annotations
@@ -16,12 +18,14 @@ from typing import Any, Dict, List, Optional
 class DiagnosisRecord:
     snapshot_hash: str
     user_key: str
-    archetype: str
-    axis: str
+    diagnosis_name: str
+    severity: int
     verdict_phrase: str
-    evidence: tuple  # 3x (title, artists_str)
-    axis_scores: Dict[str, float]
-    gate_status: Dict[str, Any]
+    symptoms: tuple
+    prescription: str
+    evidence: tuple  # 3x "title — artists"
+    score: float = 5.0
+    coverage: Optional[Dict[str, Any]] = None
     lyric_theme: Optional[str] = None
     created_at: float = field(default_factory=time.time)
 
@@ -70,24 +74,28 @@ class DiagnosisRegistry:
 
 
 def taste_diff(
-    previous: Optional[DiagnosisRecord], current_archetype: str, current_axis: str,
-    current_scores: Dict[str, float],
+    previous: Optional[DiagnosisRecord],
+    current_name: str,
+    current_severity: int,
 ) -> Optional[str]:
     """Одна строка диффа между снапшотами, или None если сравнивать не с чем."""
     if previous is None:
         return None
-    if previous.archetype != current_archetype:
+    if current_severity > previous.severity:
         return (
-            f"С прошлого снапшота диагноз сменился: был «{previous.archetype}», "
-            f"стал «{current_archetype}»."
+            f"Болезнь прогрессирует: было «{previous.diagnosis_name}» "
+            f"(стадия {previous.severity}), теперь «{current_name}» "
+            f"(стадия {current_severity})."
         )
-    prev_z = abs(previous.axis_scores.get(current_axis, 0.0))
-    cur_z = abs(current_scores.get(current_axis, 0.0))
-    if cur_z > prev_z + 0.3:
-        return f"Диагноз «{current_archetype}» с прошлого раза только усугубился."
-    if cur_z < prev_z - 0.3:
-        return f"Диагноз «{current_archetype}» держится, но динамика чуть лучше."
-    return f"Диагноз «{current_archetype}» стабилен — без улучшений."
+    if current_severity < previous.severity:
+        return (
+            f"Динамика положительная: со стадии {previous.severity} "
+            f"(«{previous.diagnosis_name}») до {current_severity}. Лечение работает?"
+        )
+    return (
+        f"Стадия держится на {current_severity}: было «{previous.diagnosis_name}», "
+        f"стало «{current_name}» — форма новая, болезнь та же."
+    )
 
 
 diagnosis_registry = DiagnosisRegistry()

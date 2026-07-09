@@ -9,7 +9,11 @@ FAKE_ROAST = RoastOutcome(
     text="**Вердикт**: библиотека — музей 2016 года.\n\nВторой абзац с панчем.",
     score=3.2,
     diagnosis="хроническая пятнадцатилетка",
+    diagnosis_name="Синдром законсервированного бунта",
+    severity=7,
+    symptoms=["волна на грустном", "24 трека Кино за вечер", "скробблинг выключен"],
     shame_facts=["37.5% библиотеки — Кино", "24 трека Кино за день", "шансон в лайках"],
+    prescription="месяц выбирать треки руками",
 )
 
 
@@ -88,13 +92,18 @@ def test_roast_flow_and_teaser(client):
     assert data["stats"]["total_tracks"] > 0
     assert len(data["shame_facts"]) == 3
 
-    # Диагноз-ядро: мок-библиотека проходит гейты и получает ровно один архетип
+    # LLM-доктор: диагноз с уникальным названием, стадией, симптомами и рецептом
     taste = data["taste_diagnosis"]
     assert taste is not None
-    assert taste["archetype"]
+    assert taste["diagnosis_name"] == "Синдром законсервированного бунта"
+    assert taste["severity"] == 7
+    assert len(taste["symptoms"]) == 3
+    assert taste["prescription"]
     assert len(taste["evidence"]) == 3
     assert taste["snapshot_hash"]
-    assert data["gate_status"]["likes_gate"] is True
+    coverage = data["medkarta_coverage"]
+    assert coverage["likes"] >= 200
+    assert coverage["history"] is True
     # axis_scores наружу не выходят — только внутренний дебаг
     assert "axis_scores" not in taste
 

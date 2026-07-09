@@ -32,16 +32,27 @@ def test_parse_verdict_full():
         "Первый панч.\n\nВторой абзац.\n\n"
         "===VERDICT===\n"
         "SCORE: 3.2\n"
+        "DIAGNOSIS_NAME: Синдром запечённого шансона\n"
+        "SEVERITY: 7\n"
         "DIAGNOSIS: хроническая пятнадцатилетка.\n"
+        "SYMPTOM: волна на грустном с 2021\n"
+        "SYMPTOM: 24 трека Кино за вечер\n"
+        "SYMPTOM: скробблинг выключен от стыда\n"
         "SHAME: 41% библиотеки из 2016\n"
         "SHAME: 24 трека Кино за день\n"
         "SHAME: шансон в лайках\n"
+        "PRESCRIPTION: месяц без «Моей волны», выбирать треки руками\n"
     )
     outcome = parse_verdict(raw)
     assert outcome.text == "Первый панч.\n\nВторой абзац."
     assert outcome.score == 3.2
     assert outcome.diagnosis == "хроническая пятнадцатилетка"
+    assert outcome.diagnosis_name == "Синдром запечённого шансона"
+    assert outcome.severity == 7
+    assert len(outcome.symptoms) == 3
+    assert outcome.symptoms[0] == "волна на грустном с 2021"
     assert len(outcome.shame_facts) == 3
+    assert outcome.prescription.startswith("месяц без")
     assert "===VERDICT===" not in outcome.text
 
 
@@ -55,6 +66,23 @@ def test_parse_verdict_missing_block():
     assert outcome.score == 5.0
     assert outcome.text.startswith("**Просто текст**")
     assert outcome.diagnosis  # первая строка как диагноз
+    # фоллбеки доктора: всё заполнено
+    assert outcome.diagnosis_name == outcome.diagnosis
+    assert 1 <= outcome.severity <= 10
+    assert outcome.prescription
+
+
+def test_parse_verdict_fallbacks_partial():
+    raw = (
+        "Текст.\n===VERDICT===\nSCORE: 2.0\n"
+        "DIAGNOSIS: приговор без имени болезни\n"
+        "SHAME: факт раз\n"
+    )
+    outcome = parse_verdict(raw)
+    assert outcome.diagnosis_name == "приговор без имени болезни"
+    assert outcome.severity == 8  # round(10 - 2.0)
+    assert outcome.symptoms == ["факт раз"]  # симптомы ← shame
+    assert outcome.prescription  # дефолтный рецепт
 
 
 def test_parse_winner():

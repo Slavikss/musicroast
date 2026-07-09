@@ -6,7 +6,16 @@ from yandex_music import Client as YandexMusicClient
 from yandex_music.exceptions import YandexMusicError
 
 from .base import StreamingProvider, StreamingService
-from .snapshot import DeclaredItem, RawTasteSnapshot
+from .snapshot import (
+    AccountInfo,
+    DeclaredItem,
+    HistoryDay,
+    LikedArtist,
+    OwnPlaylist,
+    RawTasteSnapshot,
+    UserSettingsInfo,
+    WaveStation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +281,16 @@ class YandexMusicStreamingService(StreamingService):
             snapshot.playlist_titles = [
                 str(pl.title) for pl in playlists or [] if getattr(pl, "title", None)
             ]
+            snapshot.own_playlists = [
+                OwnPlaylist(
+                    title=str(getattr(pl, "title", "") or "Без названия"),
+                    visibility=getattr(pl, "visibility", None),
+                    collective=bool(getattr(pl, "collective", False)),
+                    likes_count=getattr(pl, "likes_count", 0) or 0,
+                    track_count=getattr(pl, "track_count", 0) or 0,
+                )
+                for pl in playlists or []
+            ]
         except Exception:  # noqa: BLE001
             logger.warning("taste snapshot: users_playlists_list() failed", exc_info=True)
 
@@ -302,7 +321,196 @@ class YandexMusicStreamingService(StreamingService):
         except Exception:  # noqa: BLE001
             logger.warning("taste snapshot: users_dislikes_tracks() failed", exc_info=True)
 
+        # Анамнез: реальная история прослушиваний (music_history)
+        try:
+            snapshot.history_days = self._collect_history(liked_tracks)
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: music_history() failed", exc_info=True)
+
+        # Привязанности: лайкнутые артисты и альбомы
+        try:
+            likes = self.client.users_likes_artists(with_timestamps=True) or []
+            liked_artists: List[LikedArtist] = []
+            for like in likes[:200]:
+                artist = getattr(like, "artist", None)
+                if artist is None or not getattr(artist, "name", None):
+                    continue
+                liked_artists.append(
+                    LikedArtist(
+                        name=str(artist.name),
+                        genres=list(getattr(artist, "genres", None) or []),
+                        timestamp=str(getattr(like, "timestamp", "") or "") or None,
+                        disclaimers=[
+                            str(d) for d in getattr(artist, "disclaimers", None) or []
+                        ],
+                    )
+                )
+            snapshot.liked_artists = liked_artists
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_likes_artists() failed", exc_info=True)
+
+        try:
+            album_likes = self.client.users_likes_albums(rich=True) or []
+            snapshot.liked_albums_count = len(album_likes)
+            titles = []
+            for like in album_likes[:10]:
+                album = getattr(like, "album", None)
+                if album is not None and getattr(album, "title", None):
+                    titles.append(str(album.title))
+            snapshot.liked_album_titles = titles
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_likes_albums() failed", exc_info=True)
+
+        # Моя волна: сохранённые юзером настройки станций
+        try:
+            stations = self.client.rotor_stations_list() or []
+            waves: List[WaveStation] = []
+            for result in stations:
+                settings = getattr(result, "settings2", None) or getattr(
+                    result, "settings", None
+                )
+                custom_name = getattr(result, "custom_name", None)
+                if settings is None and not custom_name:
+                    continue
+                station = getattr(result, "station", None)
+                name = custom_name or getattr(station, "name", None) or "Станция"
+                waves.append(
+                    WaveStation(
+                        name=str(name),
+                        mood_energy=getattr(settings, "mood_energy", None),
+                        diversity=getattr(settings, "diversity", None),
+                        language=getattr(settings, "language", None),
+                    )
+                )
+            snapshot.wave_settings = waves[:8]
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: rotor_stations_list() failed", exc_info=True)
+
+        try:
+            rotor_status = self.client.rotor_account_status()
+            snapshot.skips_per_hour = getattr(rotor_status, "skips_per_hour", None)
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: rotor_account_status() failed", exc_info=True)
+
+        # Личность: аккаунт (client.me уже загружен) и настройки
+        try:
+            snapshot.account = self._collect_account()
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: account info failed", exc_info=True)
+
+        try:
+            user_settings = self.client.account_settings()
+            visibility = getattr(user_settings, "user_music_visibility", None)
+            snapshot.settings = UserSettingsInfo(
+                theme=getattr(user_settings, "theme", None),
+                auto_play_radio=getattr(user_settings, "auto_play_radio", None),
+                scrobbling=getattr(
+                    user_settings, "last_fm_scrobbling_enabled", None
+                ),
+                music_visibility=str(visibility) if visibility else None,
+                shuffle=getattr(user_settings, "shuffle_enabled", None),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: account_settings() failed", exc_info=True)
+
+        try:
+            presaves = self.client.users_presaves()
+            items = (
+                getattr(presaves, "presaves", None)
+                or getattr(presaves, "albums", None)
+                or []
+            )
+            snapshot.presaves_count = len(items)
+        except Exception:  # noqa: BLE001
+            logger.warning("taste snapshot: users_presaves() failed", exc_info=True)
+
+        # Красные флаги с уже гидрированных лайков: пометки артистов
+        try:
+            disclaimers: Dict[str, List[str]] = {}
+            for track in liked_tracks:
+                for artist in getattr(track, "artists", None) or []:
+                    marks = getattr(artist, "disclaimers", None) or []
+                    if marks and getattr(artist, "name", None):
+                        disclaimers[str(artist.name)] = [str(m) for m in marks]
+            snapshot.artist_disclaimers = disclaimers or None
+        except Exception:  # noqa: BLE001
+            pass
+
         return snapshot
+
+    def _collect_history(self, liked_tracks: List[Any]) -> List[HistoryDay]:
+        """music_history → по дням: контекст + названия реально слушанных треков."""
+        title_by_id: Dict[str, str] = {}
+        for track in liked_tracks:
+            track_id = getattr(track, "id", None)
+            title = getattr(track, "title", None)
+            if track_id is not None and title:
+                title_by_id[str(track_id)] = str(title)
+
+        history = self.client.music_history(full_models_count=10)
+        days: List[HistoryDay] = []
+        for tab in getattr(history, "history_tabs", None) or []:
+            date = str(getattr(tab, "date", "") or "")
+            for group in getattr(tab, "items", None) or []:
+                context_type, context_name = self._history_context(group)
+                titles: List[str] = []
+                for item in getattr(group, "tracks", None) or []:
+                    data = getattr(item, "data", None)
+                    full = getattr(data, "full_model", None)
+                    title = getattr(full, "title", None)
+                    if not title:
+                        item_id = getattr(data, "item_id", None)
+                        raw_id = getattr(item_id, "id", None)
+                        title = title_by_id.get(str(raw_id)) if raw_id else None
+                    if title:
+                        titles.append(str(title))
+                days.append(
+                    HistoryDay(
+                        date=date,
+                        context_type=context_type,
+                        context_name=context_name,
+                        track_titles=titles[:8],
+                    )
+                )
+            if len(days) >= 20:
+                break
+        return days
+
+    @staticmethod
+    def _history_context(group: Any) -> tuple[str, str]:
+        context = getattr(group, "context", None)
+        data = getattr(context, "data", None)
+        full = getattr(data, "full_model", None)
+        if full is not None:
+            if getattr(full, "wave", None) is not None:
+                return "wave", "Моя волна"
+            artist = getattr(full, "artist", None)
+            if artist is not None:
+                return "artist", str(getattr(artist, "name", "") or "артист")
+            playlist = getattr(full, "playlist", None)
+            if playlist is not None:
+                return "playlist", str(getattr(playlist, "title", "") or "плейлист")
+            album = getattr(full, "album", None)
+            if album is not None:
+                return "album", str(getattr(album, "title", "") or "альбом")
+        return str(getattr(context, "type", "") or "unknown"), ""
+
+    def _collect_account(self) -> AccountInfo:
+        me = self.client.me
+        account = getattr(me, "account", None)
+        subscription = getattr(me, "subscription", None)
+        plus = getattr(me, "plus", None)
+        return AccountInfo(
+            birthday=str(getattr(account, "birthday", "") or "") or None,
+            registered_at=str(getattr(account, "registered_at", "") or "") or None,
+            region=getattr(account, "region", None),
+            has_plus=bool(getattr(plus, "has_plus", False)),
+            family_subscription=bool(
+                getattr(subscription, "family_auto_renewable", None)
+            ),
+            subeditor=bool(getattr(me, "subeditor", False)),
+            child=bool(getattr(account, "child", False)),
+        )
 
     def get_artist_popularity(self, artist_ids: List[int]) -> Dict[int, Optional[int]]:
         """last_month_listeners по top-K артистам головы. Лениво и дозированно."""

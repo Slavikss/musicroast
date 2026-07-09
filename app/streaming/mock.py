@@ -11,7 +11,16 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import StreamingProvider, StreamingService
-from .snapshot import DeclaredItem, RawTasteSnapshot
+from .snapshot import (
+    AccountInfo,
+    DeclaredItem,
+    HistoryDay,
+    LikedArtist,
+    OwnPlaylist,
+    RawTasteSnapshot,
+    UserSettingsInfo,
+    WaveStation,
+)
 
 # Стабильные id артистов для оси обскурности
 _ARTIST_IDS = {
@@ -211,6 +220,39 @@ class MockStreamingService(StreamingService):
         for fake_id in range(9000, 9100):
             chart_ids[str(fake_id)] = len(chart_ids) + 1
 
+        history = [
+            HistoryDay(
+                date="2025-06-28",
+                context_type="wave",
+                context_name="Моя волна",
+                track_titles=["Группа крови", "Кукушка", "Перемен"],
+            ),
+            HistoryDay(
+                date="2025-06-27",
+                context_type="wave",
+                context_name="Моя волна",
+                track_titles=["Городская магия", "Признаки жизни"],
+            ),
+            HistoryDay(
+                date="2025-06-27",
+                context_type="artist",
+                context_name="Кино",
+                track_titles=["Пачка сигарет", "Звезда по имени Солнце", "Кукушка"],
+            ),
+            HistoryDay(
+                date="2025-06-22",
+                context_type="wave",
+                context_name="Моя волна",
+                track_titles=["Юность", "Комета"],
+            ),
+            HistoryDay(
+                date="2025-06-15",
+                context_type="playlist",
+                context_name="Тонкий инди-рок",
+                track_titles=["Numb", "In the End"],
+            ),
+        ]
+
         return RawTasteSnapshot(
             liked_tracks=list(self._tracks),
             liked_added=dict(self._added),
@@ -221,10 +263,47 @@ class MockStreamingService(StreamingService):
                 DeclaredItem(kind="playlist", name="Тонкий инди-рок"),
             ],
             playlist_titles=["Тонкий инди-рок", "Джаз для чтения", "Новый плейлист"],
+            own_playlists=[
+                OwnPlaylist(title="Тонкий инди-рок", visibility="public", track_count=12),
+                OwnPlaylist(title="Джаз для чтения", visibility="public", track_count=3),
+                OwnPlaylist(title="Новый плейлист", visibility="private", track_count=1),
+            ],
             # Дизлайкнут Егор Крид при 2 его треках в лайках — ось лицемерия
             disliked_artist_names=["Егор Крид", "Клава Кока"],
             disliked_track_artists=["Инстасамка"],
             disliked_genres=["ruspop"],
+            history_days=history,
+            liked_artists=[
+                LikedArtist(name="Кино", genres=["rusrock"], timestamp="2016-02-01"),
+                LikedArtist(name="Oxxxymiron", genres=["rusrap"], timestamp="2016-01-11",
+                            disclaimers=["foreignAgent"]),
+                LikedArtist(name="Скриптонит", genres=["rusrap"], timestamp="2017-03-05"),
+            ],
+            liked_albums_count=2,
+            liked_album_titles=["Горгород", "Группа крови"],
+            presaves_count=3,
+            wave_settings=[
+                WaveStation(name="Моя волна", mood_energy="sad",
+                            diversity="favorite", language="russian"),
+                WaveStation(name="Засыпаю", mood_energy="calm", diversity="favorite"),
+            ],
+            skips_per_hour=60,
+            account=AccountInfo(
+                birthday="1998-05-20",
+                registered_at="2013-09-01T00:00:00+00:00",
+                region=225,
+                has_plus=True,
+                family_subscription=False,
+                subeditor=False,
+            ),
+            settings=UserSettingsInfo(
+                theme="black",
+                auto_play_radio=True,
+                scrobbling=False,
+                music_visibility="public",
+                shuffle=True,
+            ),
+            artist_disclaimers={"Oxxxymiron": ["foreignAgent"]},
         )
 
     def get_artist_popularity(self, artist_ids: List[int]) -> Dict[int, Optional[int]]:
