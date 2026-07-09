@@ -2,20 +2,18 @@ from datetime import date
 
 from app.models import Track
 from app.services.diagnosis import (
-    AXIS_CONCENTRATION,
-    AXIS_GAP,
-    AXIS_HYPOCRISY,
     AXIS_TREND,
-    AXIS_WAREHOUSE,
     TasteSnapshot,
     axis_concentration,
     axis_gap,
     axis_hypocrisy,
     axis_trend,
     build_snapshot,
+    compute_axes,
     compute_snapshot_hash,
-    diagnose,
-    format_diagnosis_block,
+    evidence_lines,
+    lyrics_coverage,
+    pick_evidence,
 )
 from app.streaming.snapshot import DeclaredItem, RawTasteSnapshot
 
@@ -66,6 +64,23 @@ def test_hash_deterministic_and_order_invariant():
     assert h1 != h3
 
 
+def test_build_snapshot_from_raw():
+    raw = RawTasteSnapshot(
+        liked_tracks=[],
+        liked_added={},
+        chart_positions={"1": 1},
+        pins=[DeclaredItem(kind="artist", name="X")],
+        playlist_titles=["Рок навсегда"],
+        disliked_artist_names=["Y"],
+    )
+    tracks = _diverse(5)
+    snapshot = build_snapshot(tracks, raw)
+    assert snapshot.chart_positions == {"1": 1}
+    assert snapshot.pins[0].name == "X"
+    assert snapshot.raw is raw
+    assert snapshot.snapshot_hash == compute_snapshot_hash(tracks)
+
+
 # ------------------------------------------------------------------- axes
 
 
@@ -81,7 +96,7 @@ def test_concentration_hhi():
     assert diverse.z == 0.0  # разнообразие — не патология
 
 
-def test_gap_mismatches_and_warehouse():
+def test_gap_mismatches_and_no_declaration():
     tracks = [_track(i, genre="rusrap") for i in range(50)]
     declared = _snapshot(
         tracks,
@@ -93,13 +108,12 @@ def test_gap_mismatches_and_warehouse():
     assert len(score.facts["mismatches"]) == 2
     assert len(score.evidence) == 3
 
-    warehouse = axis_gap(_snapshot(tracks, pins=[], playlist_titles=["Новый плейлист"]))
-    assert warehouse.z == 0.0
-    assert warehouse.facts["warehouse"] is True
+    silent = axis_gap(_snapshot(tracks, pins=[], playlist_titles=["Новый плейлист"]))
+    assert silent.z == 0.0
+    assert silent.facts["no_declaration"] is True
 
 
 def test_trend_decline_and_short_span():
-    # Линейное затухание 24→1 лайков в месяц за 2022-2023
     tracks = []
     i = 0
     for offset in range(24):
@@ -117,6 +131,7 @@ def test_trend_decline_and_short_span():
         _snapshot([_track(i, added="2023-10-01") for i in range(20)]), today=TODAY
     )
     assert short.facts["span_months"] < 12
+    assert short.z == 0.0
 
 
 def test_hypocrisy_artist_and_genre():
@@ -135,106 +150,38 @@ def test_hypocrisy_artist_and_genre():
     assert len(score.evidence) == 3
 
 
-# -------------------------------------------------------------- aggregator
+# ------------------------------------------------------------- interface
 
 
-def test_gate_min_likes():
-    diagnosis, gates = diagnose(_snapshot(_diverse(50)), today=TODAY)
-    assert diagnosis is None
-    assert gates.likes_gate is False
-    assert gates.likes_count == 50
+def test_compute_axes_returns_all_five():
+    axes = compute_axes(_snapshot(_diverse(50)), today=TODAY)
+    assert len(axes) == 5
+    assert {a.axis for a in axes} == {
+        "concentration", "obscurity", "gap", "trend", "hypocrisy",
+    }
 
 
-def test_argmax_single_diagnosis_concentration():
+def test_pick_evidence_prefers_firing_axis():
     tracks = [_track(i, artist="Кино", added=f"20{16 + i % 8}-03-01") for i in range(120)] + [
         _track(200 + i, artist=f"a{i}", added=f"20{16 + i % 8}-06-01") for i in range(100)
     ]
-    snapshot = _snapshot(
-        tracks, pins=[DeclaredItem(kind="artist", name="Кино")]
-    )
-    diagnosis, gates = diagnose(snapshot, today=TODAY)
-    assert diagnosis is not None
-    assert diagnosis.axis == AXIS_CONCENTRATION
-    assert diagnosis.archetype == "Крепостной одного артиста"
-    assert len(diagnosis.evidence) == 3
-    assert diagnosis.snapshot_hash == snapshot.snapshot_hash
+    snapshot = _snapshot(tracks)
+    axes = compute_axes(snapshot, today=TODAY)
+    evidence = pick_evidence(axes, snapshot.tracks)
+    assert len(evidence) == 3
+    assert all("Кино" in t.artists for t in evidence)  # концентрация выстрелила
 
 
-def test_trend_dropped_when_span_short():
-    tracks = [_track(i, artist=f"a{i}", added="2023-10-01") for i in range(210)]
-    diagnosis, gates = diagnose(
-        _snapshot(tracks, pins=[DeclaredItem(kind="artist", name="a0")]),
-        today=TODAY,
-    )
-    assert gates.trend_gate is False
-    assert AXIS_TREND in gates.dropped_axes
-    if diagnosis:
-        assert diagnosis.axis != AXIS_TREND
+def test_pick_evidence_fallback_to_recent():
+    tracks = _diverse(10)
+    axes = compute_axes(_snapshot(tracks), today=TODAY)
+    evidence = pick_evidence(axes, tracks)
+    assert len(evidence) == 3  # свежие лайки как фоллбек
 
 
-def test_warehouse_fallback_when_nothing_fires():
-    # Разнообразная библиотека без деклараций: все оси ~0 → «склад»
-    tracks = _diverse(210, added="2023-01-01")
-    for idx, track in enumerate(tracks):
-        track.added_at = f"20{16 + idx % 8}-0{idx % 9 + 1}-01"
-    diagnosis, gates = diagnose(_snapshot(tracks), today=TODAY)
-    assert gates.warehouse is True
-    assert diagnosis is not None
-    assert diagnosis.axis == AXIS_WAREHOUSE
-    assert diagnosis.archetype == "Склад без вывески"
-
-
-def test_evidence_gate_drops_axis():
-    # Лицемерие с уликами из 2 треков → ось выброшена, уходим в склад
-    tracks = _diverse(208)
-    for idx, track in enumerate(tracks):
-        track.added_at = f"20{16 + idx % 8}-0{idx % 9 + 1}-01"
-    tracks += [_track(900, artist="Егор Крид"), _track(901, artist="Егор Крид")]
-    diagnosis, gates = diagnose(
-        _snapshot(tracks, disliked_artist_names=["Егор Крид"]), today=TODAY
-    )
-    assert AXIS_HYPOCRISY in gates.dropped_axes
-    assert diagnosis is not None
-    assert diagnosis.axis != AXIS_HYPOCRISY
-
-
-def test_lyrics_gate_coverage():
-    covered = _diverse(210)
-    _, gates = diagnose(_snapshot(covered), today=TODAY)
-    assert gates.lyrics_gate is True
-
-    uncovered = [
-        _track(i, artist=f"a{i}", lyrics=False) for i in range(210)
-    ]
-    _, gates = diagnose(_snapshot(uncovered), today=TODAY)
-    assert gates.lyrics_gate is False
-
-
-def test_build_snapshot_from_raw():
-    raw = RawTasteSnapshot(
-        liked_tracks=[],
-        liked_added={},
-        chart_positions={"1": 1},
-        pins=[DeclaredItem(kind="artist", name="X")],
-        playlist_titles=["Рок навсегда"],
-        disliked_artist_names=["Y"],
-    )
-    tracks = _diverse(5)
-    snapshot = build_snapshot(tracks, raw)
-    assert snapshot.chart_positions == {"1": 1}
-    assert snapshot.pins[0].name == "X"
-    assert snapshot.snapshot_hash == compute_snapshot_hash(tracks)
-
-
-def test_format_diagnosis_block_mentions_archetype():
-    tracks = [_track(i, artist="Кино", added=f"20{16 + i % 8}-03-01") for i in range(120)] + [
-        _track(200 + i, artist=f"a{i}", added=f"20{16 + i % 8}-06-01") for i in range(100)
-    ]
-    diagnosis, _ = diagnose(
-        _snapshot(tracks, pins=[DeclaredItem(kind="artist", name="Кино")]),
-        today=TODAY,
-    )
-    block = format_diagnosis_block(diagnosis)
-    assert "Крепостной одного артиста" in block
-    assert "Улики" in block
-    assert "DIAGNOSIS" in block
+def test_lyrics_coverage_and_lines():
+    covered = _diverse(10)
+    assert lyrics_coverage(covered) == 1.0
+    uncovered = [_track(i, lyrics=False) for i in range(10)]
+    assert lyrics_coverage(uncovered) == 0.0
+    assert evidence_lines(covered[:1]) == ["t0 — a0"]

@@ -149,9 +149,11 @@
       <span class="score" id="res-score">—</span>
       <span class="diagnosis" id="res-diagnosis"></span>
     </div>
-    <div id="res-archetype" class="hidden" style="margin:0 0 12px">
-      <div>🩺 Архетип: <b id="res-archetype-name"></b></div>
+    <div id="res-doctor" class="hidden" style="margin:0 0 12px">
+      <div>🩺 Диагноз: <b id="res-diagnosis-name"></b> <span class="muted" id="res-severity"></span></div>
+      <div class="muted" id="res-symptoms" style="white-space:pre-line"></div>
       <div class="muted" id="res-evidence"></div>
+      <div id="res-prescription" style="margin-top:6px"></div>
     </div>
     <div class="roast-result" id="res-text"></div>
     <img class="cover hidden" id="res-image" alt="Обложка позора">
@@ -334,13 +336,18 @@
       $("res-score").textContent = data.score + "/10";
       $("res-diagnosis").textContent = data.diagnosis || "";
       const dx = data.taste_diagnosis;
-      if (dx && dx.archetype) {
-        $("res-archetype-name").textContent = dx.archetype;
+      if (dx && dx.diagnosis_name) {
+        $("res-diagnosis-name").textContent = dx.diagnosis_name;
+        $("res-severity").textContent = dx.severity ? "(стадия " + dx.severity + "/10)" : "";
+        $("res-symptoms").textContent =
+          (dx.symptoms && dx.symptoms.length) ? dx.symptoms.map(s => "• " + s).join("\n") : "";
         $("res-evidence").textContent =
           (dx.evidence && dx.evidence.length) ? "Улики: " + dx.evidence.join(" · ") : "";
-        show($("res-archetype"));
+        $("res-prescription").textContent =
+          dx.prescription ? "💊 Рецепт: " + dx.prescription : "";
+        show($("res-doctor"));
       } else {
-        hide($("res-archetype"));
+        hide($("res-doctor"));
       }
       renderMiniMd($("res-text"), data.roast);
       if (data.image_url) {

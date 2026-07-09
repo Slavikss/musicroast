@@ -207,7 +207,9 @@ def create_app() -> FastAPI:
             sample_lines="",
             playlist_title=result.get("playlist", {}).get("title", ""),
             level=result.get("level", RoastLevel.MEDIUM.value),
-            archetype=taste.get("archetype", ""),
+            diagnosis_name=taste.get("diagnosis_name", ""),
+            severity=taste.get("severity", 0),
+            prescription=taste.get("prescription", ""),
         )
         result["roast_id"] = await roast_registry.create(record)
         return JSONResponse(content=result)
@@ -224,7 +226,8 @@ def create_app() -> FastAPI:
                 "display_name": record.display_name,
                 "score": record.score,
                 "diagnosis": record.diagnosis,
-                "archetype": record.archetype,
+                "diagnosis_name": record.diagnosis_name,
+                "severity": record.severity,
                 "first_punch": first_punch,
                 "level": record.level,
             }

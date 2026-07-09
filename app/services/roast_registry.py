@@ -28,7 +28,9 @@ class RoastRecord:
     sample_lines: str
     playlist_title: str
     level: str
-    archetype: str = ""
+    diagnosis_name: str = ""
+    severity: int = 0
+    prescription: str = ""
     created_at: float = field(default_factory=time.time)
     expires_at: Optional[float] = None
 

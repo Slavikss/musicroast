@@ -1,11 +1,9 @@
-"""Детерминированное диагноз-ядро.
+"""Лаборатория: детерминированные «анализы» вкуса.
 
-Пять чистых осевых функций над снапшотом вкуса, каждая возвращает z-score.
-Агрегатор — argmax по |z|, НЕ среднее: диагноз — это одна ось, несколько
-осей — это дашборд, а дашборд не смешит. LLM в этом модуле не живёт вообще.
-
-z-скоры считаются от зашитых калибровочных констант (_CALIBRATION) — это
-ручная калибровка, не популяционная статистика; подстраивается по логам.
+Пять чистых осевых функций над снапшотом, каждая возвращает z-score и факты.
+Диагноз по анализам ставит LLM-доктор (см. medkarta.py + промпты) — здесь
+только вычисления. z-скоры считаются от зашитых калибровочных констант
+(_CALIBRATION) — ручная калибровка, подстраивается по логам.
 """
 
 from __future__ import annotations
@@ -24,9 +22,8 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- constants
 
-MIN_LIKES = 200            # гейт: меньше — выборка без мощности
-MIN_SPAN_MONTHS = 12       # гейт оси тренда
-MIN_EVIDENCE = 3           # улик на финальную ось
+SMALL_LIBRARY = 200        # ниже — в медкарте пометка «выборка маленькая»
+MIN_EVIDENCE = 3
 LYRICS_COVERAGE_GATE = 0.6
 HEAD_ARTISTS_K = 5         # сколько артистов головы обогащать популярностью
 
@@ -34,30 +31,23 @@ HEAD_ARTISTS_K = 5         # сколько артистов головы обо
 _CALIBRATION = {
     "hhi": (0.035, 0.04),            # HHI по артистам
     "chart_share": (0.02, 0.03),     # доля лайков, сидящих в чарте
-    "underground": (0.0, 1.0),       # уже нормированная субметрика
     "gap_mismatches": (0.4, 0.8),    # число расхождений заявленное/фактическое
     "trend_decline": (0.0, 0.12),    # относительный наклон вниз
     "hypocrisy_hits": (0.3, 0.7),    # число пересечений дизлайк/лайк
 }
-
-# Порог «ось реально выстрелила»; ниже — при пустом заявленном уходим в «склад»
-_FIRING_THRESHOLD = 0.8
 
 AXIS_CONCENTRATION = "concentration"
 AXIS_OBSCURITY = "obscurity"
 AXIS_GAP = "gap"
 AXIS_TREND = "trend"
 AXIS_HYPOCRISY = "hypocrisy"
-AXIS_WAREHOUSE = "warehouse"
 
-ARCHETYPES = {
-    AXIS_CONCENTRATION: "Крепостной одного артиста",
-    "obscurity_mainstream": "Дитя алгоритма",
-    "obscurity_underground": "Археолог-сноб",
-    AXIS_GAP: "Позёр",
-    AXIS_TREND: "Некроз вкуса",
-    AXIS_HYPOCRISY: "Двуличный меломан",
-    AXIS_WAREHOUSE: "Склад без вывески",
+AXIS_TITLES = {
+    AXIS_CONCENTRATION: "Концентрация (зависимость от одного артиста)",
+    AXIS_OBSCURITY: "Чартовость/обскурность",
+    AXIS_GAP: "Разрыв «заявленное vs фактическое»",
+    AXIS_TREND: "Затухание библиотеки",
+    AXIS_HYPOCRISY: "Лицемерие (дизлайкнутое ∩ лайкнутое)",
 }
 
 # Словарь жанр-слов для оси разрыва: ключевое слово в названии → жанры Яндекса
@@ -99,7 +89,7 @@ _MEANINGLESS_TITLES = {"мне нравится", "новый плейлист",
 
 @dataclass
 class TasteSnapshot:
-    """Нормализованный снапшот: единица работы ядра, ключ — hash."""
+    """Нормализованный снапшот: единица работы лаборатории, ключ — hash."""
 
     tracks: List[Track]
     snapshot_hash: str
@@ -109,6 +99,7 @@ class TasteSnapshot:
     disliked_artist_names: Optional[List[str]] = None
     disliked_track_artists: Optional[List[str]] = None
     disliked_genres: Optional[List[str]] = None
+    raw: Optional[RawTasteSnapshot] = None  # весь сырой снапшот для медкарты
 
 
 @dataclass
@@ -118,42 +109,6 @@ class AxisScore:
     evidence: List[Track] = field(default_factory=list)
     facts: Dict[str, Any] = field(default_factory=dict)
     direction: str = ""  # для двунаправленных осей (обскурность)
-
-
-@dataclass
-class GateStatus:
-    likes_count: int = 0
-    likes_gate: bool = False
-    span_months: int = 0
-    trend_gate: bool = False
-    lyrics_coverage: float = 0.0
-    lyrics_gate: bool = False
-    warehouse: bool = False
-    dropped_axes: List[str] = field(default_factory=list)
-
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "likes_count": self.likes_count,
-            "likes_gate": self.likes_gate,
-            "span_months": self.span_months,
-            "trend_gate": self.trend_gate,
-            "lyrics_coverage": round(self.lyrics_coverage, 2),
-            "lyrics_gate": self.lyrics_gate,
-            "warehouse": self.warehouse,
-            "dropped_axes": list(self.dropped_axes),
-        }
-
-
-@dataclass
-class Diagnosis:
-    snapshot_hash: str
-    axis: str
-    archetype: str
-    axis_scores: Dict[str, float]
-    evidence: List[Track]
-    facts: Dict[str, Any]
-    gate_status: GateStatus
-    lyric_theme: Optional[str] = None
 
 
 PopularityProvider = Callable[[List[int]], Dict[int, Optional[int]]]
@@ -174,7 +129,7 @@ def compute_snapshot_hash(tracks: Sequence[Track]) -> str:
 def build_snapshot(
     normalized_tracks: Sequence[Track], raw: Optional[RawTasteSnapshot]
 ) -> TasteSnapshot:
-    """Собирает единицу работы ядра из нормализованных лайков и сырых данных."""
+    """Собирает единицу работы лаборатории из нормализованных лайков и сырья."""
     return TasteSnapshot(
         tracks=list(normalized_tracks),
         snapshot_hash=compute_snapshot_hash(normalized_tracks),
@@ -184,6 +139,7 @@ def build_snapshot(
         disliked_artist_names=raw.disliked_artist_names if raw else None,
         disliked_track_artists=raw.disliked_track_artists if raw else None,
         disliked_genres=raw.disliked_genres if raw else None,
+        raw=raw,
     )
 
 
@@ -192,7 +148,7 @@ def build_snapshot(
 
 def _z(metric: str, value: float) -> float:
     """Псевдо-z с клампом снизу: оси однонаправленные, отрицательное
-    отклонение = «патологии нет», оно не должно выигрывать argmax по |z|."""
+    отклонение = «патологии нет»."""
     mean, sigma = _CALIBRATION[metric]
     return max(0.0, (value - mean) / sigma) if sigma else 0.0
 
@@ -218,6 +174,12 @@ def _parse_month(added_at: Optional[str]) -> Optional[date]:
 
 def _months_between(start: date, end: date) -> int:
     return (end.year - start.year) * 12 + (end.month - start.month)
+
+
+def lyrics_coverage(tracks: Sequence[Track]) -> float:
+    if not tracks:
+        return 0.0
+    return sum(1 for t in tracks if t.lyrics_available) / len(tracks)
 
 
 # ------------------------------------------------------------------- axes
@@ -255,7 +217,6 @@ def axis_obscurity(
     if not tracks:
         return AxisScore(axis=AXIS_OBSCURITY, z=0.0)
 
-    # Субметрика 1: доля лайков, сидящих в чарте прямо сейчас
     chart_hits: List[Track] = []
     if snapshot.chart_positions:
         chart_ids = set(snapshot.chart_positions)
@@ -267,7 +228,6 @@ def axis_obscurity(
     chart_share = len(chart_hits) / len(tracks)
     z_mainstream = _z("chart_share", chart_share)
 
-    # Субметрика 2: медиана месячных слушателей головы (ленивое обогащение)
     z_underground = 0.0
     median_listeners: Optional[int] = None
     head_artist_ids: List[int] = []
@@ -335,9 +295,7 @@ def axis_gap(snapshot: TasteSnapshot) -> AxisScore:
     pins = snapshot.pins or []
     titles = _meaningful_titles(snapshot.playlist_titles)
     if not pins and not titles:
-        return AxisScore(
-            axis=AXIS_GAP, z=0.0, facts={"warehouse": True}
-        )
+        return AxisScore(axis=AXIS_GAP, z=0.0, facts={"no_declaration": True})
 
     counts = _artist_counts(snapshot.tracks)
     total = len(snapshot.tracks) or 1
@@ -348,18 +306,14 @@ def axis_gap(snapshot: TasteSnapshot) -> AxisScore:
     mismatches: List[str] = []
     evidence: List[Track] = []
 
-    # (а) запиненные артисты, которых в реальных лайках почти нет
     for pin in pins:
         if pin.kind == "artist" and counts.get(pin.name, 0) <= 1:
             mismatches.append(f"закрепил артиста «{pin.name}», а в лайках его нет")
 
-    # (б) жанр-слова в названиях плейлистов против фактических долей
-    declared_genres: set[str] = set()
     for title in titles:
         lowered = title.lower()
         for keyword, genres in _GENRE_KEYWORDS.items():
             if keyword in lowered:
-                declared_genres.update(genres)
                 if all(genre_share.get(g, 0.0) < 0.05 for g in genres):
                     mismatches.append(
                         f"плейлист «{title}» заявляет {keyword}, "
@@ -367,8 +321,6 @@ def axis_gap(snapshot: TasteSnapshot) -> AxisScore:
                     )
 
     if mismatches:
-        # Улики: треки фактически доминирующего жанра — то, что человек слушает
-        # на самом деле вместо заявленного
         evidence = [t for t in snapshot.tracks if t.genre in top_genres[:1]][
             :MIN_EVIDENCE
         ]
@@ -381,13 +333,12 @@ def axis_gap(snapshot: TasteSnapshot) -> AxisScore:
             "mismatches": mismatches[:4],
             "declared": [p.name for p in pins][:5] + titles[:5],
             "actual_top_genres": top_genres,
-            "warehouse": False,
         },
     )
 
 
 def axis_trend(snapshot: TasteSnapshot, today: Optional[date] = None) -> AxisScore:
-    """Наклон месячных лайков: резкое затухание = некроз вкуса."""
+    """Наклон месячных лайков: резкое затухание = вкус умирает."""
     today = today or date.today()
     months = [m for m in (_parse_month(t.added_at) for t in snapshot.tracks) if m]
     if not months:
@@ -395,10 +346,9 @@ def axis_trend(snapshot: TasteSnapshot, today: Optional[date] = None) -> AxisSco
 
     first, last = min(months), max(months)
     span = _months_between(first, last)
-    if span < MIN_SPAN_MONTHS:
+    if span < 12:
         return AxisScore(axis=AXIS_TREND, z=0.0, facts={"span_months": span})
 
-    # Помесячные счётчики за trailing-окно до сегодня (тишина = нули)
     window = min(_months_between(first, today.replace(day=1)) + 1, 36)
     counts_by_offset = Counter(_months_between(m, today.replace(day=1)) for m in months)
     series = [counts_by_offset.get(offset, 0) for offset in range(window - 1, -1, -1)]
@@ -449,9 +399,7 @@ def axis_hypocrisy(snapshot: TasteSnapshot) -> AxisScore:
         liked_count = counts.get(artist, 0)
         if liked_count >= 2:
             hits.append(f"дизлайкнул {artist}, но держит {liked_count} его треков в лайках")
-            evidence.extend(
-                t for t in snapshot.tracks if artist in t.artists
-            )
+            evidence.extend(t for t in snapshot.tracks if artist in t.artists)
 
     for genre in set(snapshot.disliked_genres or []):
         share = genre_counts.get(genre, 0) / total
@@ -469,29 +417,15 @@ def axis_hypocrisy(snapshot: TasteSnapshot) -> AxisScore:
     )
 
 
-# -------------------------------------------------------------- aggregator
+# --------------------------------------------------------------- interface
 
 
-def _lyrics_coverage(tracks: Sequence[Track]) -> float:
-    if not tracks:
-        return 0.0
-    return sum(1 for t in tracks if t.lyrics_available) / len(tracks)
-
-
-def diagnose(
+def compute_axes(
     snapshot: TasteSnapshot,
     popularity_provider: Optional[PopularityProvider] = None,
     today: Optional[date] = None,
-) -> tuple[Optional[Diagnosis], GateStatus]:
-    """Argmax по |z| осей → ровно один архетип. Провал гейтов → (None, status)."""
-    gates = GateStatus(likes_count=len(snapshot.tracks))
-    gates.likes_gate = gates.likes_count >= MIN_LIKES
-    gates.lyrics_coverage = _lyrics_coverage(snapshot.tracks)
-    gates.lyrics_gate = gates.lyrics_coverage >= LYRICS_COVERAGE_GATE
-
-    if not gates.likes_gate:
-        return None, gates
-
+) -> List[AxisScore]:
+    """Все анализы разом. Диагноз по ним ставит LLM-доктор, не код."""
     axes = [
         axis_concentration(snapshot),
         axis_obscurity(snapshot, popularity_provider),
@@ -499,124 +433,21 @@ def diagnose(
         axis_trend(snapshot, today=today),
         axis_hypocrisy(snapshot),
     ]
-
-    trend_axis = next(a for a in axes if a.axis == AXIS_TREND)
-    gates.span_months = int(trend_axis.facts.get("span_months", 0))
-    gates.trend_gate = gates.span_months >= MIN_SPAN_MONTHS
-    if not gates.trend_gate:
-        axes = [a for a in axes if a.axis != AXIS_TREND]
-        gates.dropped_axes.append(AXIS_TREND)
-
-    gap_axis = next((a for a in axes if a.axis == AXIS_GAP), None)
-    gates.warehouse = bool(gap_axis and gap_axis.facts.get("warehouse"))
-
-    axis_scores = {a.axis: round(a.z, 2) for a in axes}
     logger.info(
-        "diagnosis axes for %s: %s", snapshot.snapshot_hash, axis_scores
+        "axes for %s: %s",
+        snapshot.snapshot_hash,
+        {a.axis: round(a.z, 2) for a in axes},
     )
-
-    # argmax по |z| с гейтом улик: мало улик — ось выброшена, берём следующую
-    winner: Optional[AxisScore] = None
-    for candidate in sorted(axes, key=lambda a: abs(a.z), reverse=True):
-        if len(candidate.evidence) >= MIN_EVIDENCE:
-            winner = candidate
-            break
-        gates.dropped_axes.append(candidate.axis)
-
-    # Ни одна ось не выстрелила по-настоящему + декларации нет → «склад»
-    if (winner is None or abs(winner.z) < _FIRING_THRESHOLD) and gates.warehouse:
-        evidence = snapshot.tracks[-MIN_EVIDENCE:]
-        return (
-            Diagnosis(
-                snapshot_hash=snapshot.snapshot_hash,
-                axis=AXIS_WAREHOUSE,
-                archetype=ARCHETYPES[AXIS_WAREHOUSE],
-                axis_scores=axis_scores,
-                evidence=evidence,
-                facts={
-                    "reason": "нет ни pins, ни осмысленных плейлистов — просто склад лайков",
-                    "likes_count": gates.likes_count,
-                },
-                gate_status=gates,
-            ),
-            gates,
-        )
-
-    if winner is None:
-        return None, gates
-
-    archetype_key = winner.axis
-    if winner.axis == AXIS_OBSCURITY:
-        archetype_key = f"obscurity_{winner.direction or 'mainstream'}"
-
-    return (
-        Diagnosis(
-            snapshot_hash=snapshot.snapshot_hash,
-            axis=winner.axis,
-            archetype=ARCHETYPES.get(archetype_key, ARCHETYPES[AXIS_WAREHOUSE]),
-            axis_scores=axis_scores,
-            evidence=winner.evidence[:MIN_EVIDENCE],
-            facts=winner.facts,
-            gate_status=gates,
-        ),
-        gates,
-    )
+    return axes
 
 
-# ------------------------------------------------------------ LLM handoff
+def pick_evidence(axes: List[AxisScore], tracks: Sequence[Track]) -> List[Track]:
+    """Улики для карточки: треки самой выстрелившей оси, иначе свежие лайки."""
+    for axis in sorted(axes, key=lambda a: a.z, reverse=True):
+        if axis.z > 0 and len(axis.evidence) >= MIN_EVIDENCE:
+            return axis.evidence[:MIN_EVIDENCE]
+    return list(tracks[-MIN_EVIDENCE:])[::-1]
 
 
-def evidence_lines(diagnosis: Diagnosis) -> List[str]:
-    return [
-        f"{track.title} — {', '.join(track.artists)}"
-        for track in diagnosis.evidence
-    ]
-
-
-def format_diagnosis_block(diagnosis: Diagnosis) -> str:
-    """Блок для промпта: всё уже доказано, LLM остаётся рендерить приговор."""
-    _FACT_LABELS = {
-        "mismatches": "расхождения",
-        "declared": "заявляет о себе",
-        "actual_top_genres": "реально слушает",
-        "hits": "пойман на",
-        "top_artist": "артист-паразит",
-        "top_count": "его треков",
-        "top_share_pct": "доля библиотеки, %",
-        "chart_hits": "лайков прямо из чарта",
-        "chart_share_pct": "доля чартовых лайков, %",
-        "median_listeners": "медиана слушателей головы",
-        "span_months": "история, мес",
-        "adds_last_3m": "добавлено за 3 мес",
-        "peak_month_adds": "пик добавлений в месяц",
-        "quiet_months": "месяцев тишины",
-        "lyric_example": "характерная строчка",
-        "reason": "причина",
-        "likes_count": "лайков всего",
-        "hhi": "индекс концентрации",
-    }
-    facts_lines = []
-    for key, value in diagnosis.facts.items():
-        if key == "warehouse" or value in (None, [], ""):
-            continue
-        label = _FACT_LABELS.get(key, key)
-        if isinstance(value, list):
-            facts_lines.append(f"  - {label}: " + "; ".join(str(v) for v in value))
-        else:
-            facts_lines.append(f"  - {label}: {value}")
-
-    lyric_line = (
-        f"Тема текстов его песен: {diagnosis.lyric_theme}."
-        if diagnosis.lyric_theme
-        else ""
-    )
-    return (
-        "ПОСТАВЛЕННЫЙ ДИАГНОЗ (вычислен детерминированно по данным, не оспаривается):\n"
-        f"архетип — «{diagnosis.archetype}».\n"
-        "Доказательная база:\n" + "\n".join(facts_lines) + "\n"
-        "Улики (3 трека): " + "; ".join(evidence_lines(diagnosis)) + ".\n"
-        + (lyric_line + "\n" if lyric_line else "")
-        + "Строй ВЕСЬ роаст вокруг этого диагноза как главной оси — остальные "
-        "факты только фон. Строка DIAGNOSIS в финальном вердикте обязана быть "
-        f"приговором в духе архетипа «{diagnosis.archetype}»."
-    )
+def evidence_lines(tracks: Sequence[Track]) -> List[str]:
+    return [f"{t.title} — {', '.join(t.artists)}" for t in tracks]

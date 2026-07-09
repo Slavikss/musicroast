@@ -20,9 +20,15 @@ IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 _VERDICT_MARKER = "===VERDICT==="
 _SCORE_RE = re.compile(r"SCORE:\s*([0-9]+(?:[.,][0-9]+)?)", re.IGNORECASE)
+_DIAGNOSIS_NAME_RE = re.compile(r"DIAGNOSIS_NAME:\s*(.+)", re.IGNORECASE)
+_SEVERITY_RE = re.compile(r"SEVERITY:\s*([0-9]+)", re.IGNORECASE)
 _DIAGNOSIS_RE = re.compile(r"DIAGNOSIS:\s*(.+)", re.IGNORECASE)
+_SYMPTOM_RE = re.compile(r"SYMPTOM:\s*(.+)", re.IGNORECASE)
 _SHAME_RE = re.compile(r"SHAME:\s*(.+)", re.IGNORECASE)
+_PRESCRIPTION_RE = re.compile(r"PRESCRIPTION:\s*(.+)", re.IGNORECASE)
 _WINNER_RE = re.compile(r"^WINNER:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+DEFAULT_PRESCRIPTION = "две недели слушать тишину, потом начать с чистого листа"
 
 # Смягчаем только harassment: прожарка — это дружеская агрессия по договорённости
 _SAFETY_SETTINGS = [
@@ -40,19 +46,25 @@ _SOFTEN_SUFFIX = (
 
 @dataclass
 class RoastOutcome:
-    """Структурированный результат прожарки."""
+    """Структурированный результат прожарки/осмотра."""
 
     text: str
     score: float = 5.0
-    diagnosis: str = ""
+    diagnosis: str = ""  # фраза-приговор
+    diagnosis_name: str = ""  # название болезни, придуманное LLM
+    severity: int = 5  # стадия 1-10
+    symptoms: List[str] = field(default_factory=list)
     shame_facts: List[str] = field(default_factory=list)
+    prescription: str = ""
 
 
 def parse_verdict(raw_text: str) -> RoastOutcome:
-    """Вырезает блок ===VERDICT=== из текста и парсит его поля."""
+    """Вырезает блок ===VERDICT=== из текста и парсит его поля с фоллбеками."""
     text = (raw_text or "").strip()
     if _VERDICT_MARKER not in text:
-        return RoastOutcome(text=text, diagnosis=_first_line(text))
+        outcome = RoastOutcome(text=text, diagnosis=_first_line(text))
+        _apply_fallbacks(outcome)
+        return outcome
 
     body, _, verdict_block = text.partition(_VERDICT_MARKER)
     outcome = RoastOutcome(text=body.strip())
@@ -66,16 +78,51 @@ def parse_verdict(raw_text: str) -> RoastOutcome:
         except ValueError:
             pass
 
+    name_match = _DIAGNOSIS_NAME_RE.search(verdict_block)
+    if name_match:
+        outcome.diagnosis_name = name_match.group(1).strip().strip("«»\"'").rstrip(".")
+
+    severity_match = _SEVERITY_RE.search(verdict_block)
+    if severity_match:
+        try:
+            outcome.severity = min(max(int(severity_match.group(1)), 1), 10)
+        except ValueError:
+            pass
+    else:
+        outcome.severity = 0  # заполнится фоллбеком
+
+    # «DIAGNOSIS_NAME:» не матчится на «DIAGNOSIS:» (после слова идёт «_», не «:»)
     diagnosis_match = _DIAGNOSIS_RE.search(verdict_block)
     if diagnosis_match:
         outcome.diagnosis = diagnosis_match.group(1).strip().rstrip(".")
-    if not outcome.diagnosis:
-        outcome.diagnosis = _first_line(outcome.text)
 
+    outcome.symptoms = [
+        m.group(1).strip() for m in _SYMPTOM_RE.finditer(verdict_block)
+    ][:3]
     outcome.shame_facts = [
         m.group(1).strip() for m in _SHAME_RE.finditer(verdict_block)
     ][:3]
+
+    prescription_match = _PRESCRIPTION_RE.search(verdict_block)
+    if prescription_match:
+        outcome.prescription = prescription_match.group(1).strip().rstrip(".")
+
+    _apply_fallbacks(outcome)
     return outcome
+
+
+def _apply_fallbacks(outcome: RoastOutcome) -> None:
+    """Приговор обязан существовать целиком — недостающее достраивается."""
+    if not outcome.diagnosis:
+        outcome.diagnosis = outcome.diagnosis_name or _first_line(outcome.text)
+    if not outcome.diagnosis_name:
+        outcome.diagnosis_name = outcome.diagnosis
+    if not outcome.severity:
+        outcome.severity = min(max(round(10 - outcome.score), 1), 10)
+    if not outcome.symptoms:
+        outcome.symptoms = list(outcome.shame_facts)
+    if not outcome.prescription:
+        outcome.prescription = DEFAULT_PRESCRIPTION
 
 
 def parse_winner(raw_text: str) -> tuple[str, Optional[str]]:
@@ -152,13 +199,14 @@ class GeminiRoaster:
         tracks: List[Track],
         stats_block: Optional[str],
         track_list_header: str,
-        diagnosis_block: Optional[str] = None,
+        medkarta: Optional[str] = None,
     ) -> str:
         lines: List[str] = []
-        if diagnosis_block:
-            lines.append(diagnosis_block)
+        if medkarta:
+            # Медкарта включает блок фактов библиотеки — stats_block не дублируем
+            lines.append(medkarta)
             lines.append("")
-        if stats_block:
+        elif stats_block:
             lines.append(stats_block)
             lines.append("")
         lines.append(track_list_header)
@@ -180,12 +228,12 @@ class GeminiRoaster:
         stats_block: Optional[str] = None,
         level: RoastLevel = RoastLevel.MEDIUM,
         prompt_version: Optional[str] = None,
-        diagnosis_block: Optional[str] = None,
+        medkarta: Optional[str] = None,
     ) -> RoastOutcome:
-        """Генерация прожарки: текст + структурированный вердикт."""
+        """Осмотр пациента: текст прожарки + структурированный диагноз."""
         template = self.prompt_manager.get_template(prompt_version or level.value)
         user_prompt = self._build_user_prompt(
-            tracks, stats_block, template.track_list_header, diagnosis_block
+            tracks, stats_block, template.track_list_header, medkarta
         )
 
         try:

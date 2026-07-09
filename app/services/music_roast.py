@@ -10,11 +10,14 @@ from app.models import PlaylistInfoRequest, PlaylistRequest, RoastRequest, Track
 from app.prompts import PromptManager, RoastLevel
 from app.services.battle import BattleSide
 from app.services.diagnosis import (
-    Diagnosis,
+    LYRICS_COVERAGE_GATE,
+    AxisScore,
+    TasteSnapshot,
     build_snapshot,
-    diagnose,
+    compute_axes,
     evidence_lines,
-    format_diagnosis_block,
+    lyrics_coverage,
+    pick_evidence,
 )
 from app.services.gemini import GeminiRoaster, RoastOutcome, parse_winner
 from app.services.library_stats import (
@@ -28,6 +31,7 @@ from app.services.lyrics_layer import (
     extract_lyric_theme,
     pick_lyric_candidates,
 )
+from app.services.medkarta import build_medkarta, medkarta_coverage
 from app.services.track_normalizer import TrackNormalizer
 from app.streaming import StreamingProvider, create_streaming_service
 
@@ -50,16 +54,26 @@ def _top_artist_name(tracks: List[Track]) -> Optional[str]:
 
 
 @dataclass
+class MedkartaBundle:
+    """Результат работы лаборатории: медкарта + улики + метаданные."""
+
+    medkarta: str
+    snapshot_hash: str
+    evidence: List[Track]
+    coverage: Dict[str, Any]
+    lyric_theme: Optional[str] = None
+
+
+@dataclass
 class PreparedLibrary:
-    """Загруженная и посчитанная библиотека — вход для прожарки."""
+    """Загруженная и посчитанная библиотека — вход для осмотра."""
 
     provider: StreamingProvider
     tracks: List[Track]
     stats: LibraryStats
     stats_block: str
     metadata: Dict[str, Any]
-    diagnosis: Optional[Diagnosis] = None
-    gate_status: Optional[Dict[str, Any]] = None
+    bundle: Optional[MedkartaBundle] = None  # только для «Мне нравится»
 
     @property
     def top_artist(self) -> Optional[str]:
@@ -89,8 +103,8 @@ class MusicRoastService:
 
         self.normalizer = TrackNormalizer()
         self.roaster = GeminiRoaster(api_key, self.prompt_manager)
-        # Кэш ядра по snapshot_hash: тот же снапшот → диагноз и лирика бесплатно
-        self._diagnosis_cache: Dict[str, Diagnosis] = {}
+        # Кэш лаборатории по snapshot_hash: тот же снапшот → медкарта бесплатно
+        self._medkarta_cache: Dict[str, MedkartaBundle] = {}
 
     def _create_streaming_service(self, provider: StreamingProvider, token: str):
         return create_streaming_service(provider, token)
@@ -174,63 +188,66 @@ class MusicRoastService:
                 status_code=404, detail="В плейлисте не найдено ни одного трека"
             )
 
-        diagnosis, gate_status = (None, None)
-        if raw_snapshot is not None:
-            diagnosis, gate_status = self._run_diagnosis(
-                service, normalized, raw_snapshot
-            )
-
         stats = compute_library_stats(normalized)
+
+        bundle = None
+        if raw_snapshot is not None:
+            bundle = self._build_medkarta_bundle(service, normalized, raw_snapshot, stats)
+
         return PreparedLibrary(
             provider=provider,
             tracks=normalized,
             stats=stats,
             stats_block=format_stats_block(stats),
             metadata={**metadata, "track_count": len(normalized)},
-            diagnosis=diagnosis,
-            gate_status=gate_status,
+            bundle=bundle,
         )
 
-    def _run_diagnosis(
-        self, service, normalized: List[Track], raw_snapshot
-    ) -> Tuple[Optional[Diagnosis], Dict[str, Any]]:
-        """Детерминированное ядро + лирик-слой, с кэшем по snapshot_hash."""
+    def _build_medkarta_bundle(
+        self, service, normalized: List[Track], raw_snapshot, stats: LibraryStats
+    ) -> MedkartaBundle:
+        """Лаборатория: оси + лирика + медкарта, с кэшем по snapshot_hash."""
         snapshot = build_snapshot(normalized, raw_snapshot)
 
-        cached = self._diagnosis_cache.get(snapshot.snapshot_hash)
+        cached = self._medkarta_cache.get(snapshot.snapshot_hash)
         if cached is not None:
-            logger.info("diagnosis cache hit: %s", snapshot.snapshot_hash)
-            return cached, cached.gate_status.as_dict()
+            logger.info("medkarta cache hit: %s", snapshot.snapshot_hash)
+            return cached
 
-        diagnosis, gates = diagnose(
+        axes = compute_axes(
             snapshot, popularity_provider=service.get_artist_popularity
         )
-        if diagnosis is None:
-            logger.info(
-                "diagnosis gates failed: %s", gates.as_dict()
-            )
-            return None, gates.as_dict()
+        evidence = pick_evidence(axes, snapshot.tracks)
 
         # Лирик-слой: строго за гейтом покрытия, провал = молча без темы
-        if gates.lyrics_gate:
-            top_artist = (
-                diagnosis.facts.get("top_artist")
-                or (snapshot.tracks and _top_artist_name(snapshot.tracks))
-            )
-            candidates = pick_lyric_candidates(
-                diagnosis.evidence, snapshot.tracks, top_artist
-            )
+        lyric_theme = None
+        lyric_example = None
+        if lyrics_coverage(snapshot.tracks) >= LYRICS_COVERAGE_GATE:
+            top_artist = _top_artist_name(snapshot.tracks)
+            candidates = pick_lyric_candidates(evidence, snapshot.tracks, top_artist)
             lyrics = collect_lyrics(service, candidates)
-            theme = extract_lyric_theme(
-                self.roaster.client, GEMINI_TEXT_MODEL, lyrics
-            )
+            theme = extract_lyric_theme(self.roaster.client, GEMINI_TEXT_MODEL, lyrics)
             if theme:
-                diagnosis.lyric_theme = theme.theme
-                if theme.example_line:
-                    diagnosis.facts["lyric_example"] = theme.example_line
+                lyric_theme = theme.theme
+                lyric_example = theme.example_line
 
-        self._diagnosis_cache[snapshot.snapshot_hash] = diagnosis
-        return diagnosis, gates.as_dict()
+        medkarta = build_medkarta(
+            snapshot, axes, stats, lyric_theme=lyric_theme, lyric_example=lyric_example
+        )
+        bundle = MedkartaBundle(
+            medkarta=medkarta,
+            snapshot_hash=snapshot.snapshot_hash,
+            evidence=evidence,
+            coverage=medkarta_coverage(snapshot),
+            lyric_theme=lyric_theme,
+        )
+        logger.info(
+            "medkarta built for %s: coverage=%s",
+            snapshot.snapshot_hash,
+            bundle.coverage,
+        )
+        self._medkarta_cache[snapshot.snapshot_hash] = bundle
+        return bundle
 
     def roast_library(
         self,
@@ -240,20 +257,13 @@ class MusicRoastService:
     ) -> RoastOutcome:
         """Этап 2: генерация прожарки по подготовленной библиотеке."""
         sampled = select_tracks_for_prompt(prepared.tracks)
-        diagnosis_block = (
-            format_diagnosis_block(prepared.diagnosis) if prepared.diagnosis else None
-        )
-        outcome = self.roaster.generate_roast(
+        return self.roaster.generate_roast(
             sampled,
             stats_block=prepared.stats_block,
             level=level,
             prompt_version=prompt_version,
-            diagnosis_block=diagnosis_block,
+            medkarta=prepared.bundle.medkarta if prepared.bundle else None,
         )
-        # Приговор обязан существовать: LLM не вернул DIAGNOSIS → имя архетипа
-        if prepared.diagnosis and not outcome.diagnosis:
-            outcome.diagnosis = prepared.diagnosis.archetype
-        return outcome
 
     def generate_roast(self, request: RoastRequest) -> Dict[str, Any]:
         """Полный цикл для REST API."""
@@ -276,7 +286,7 @@ class MusicRoastService:
             "level": request.level.value,
             "prompt_version": request.prompt_version or request.level.value,
             "stats": prepared.stats.model_dump(),
-            "gate_status": prepared.gate_status,
+            "medkarta_coverage": prepared.bundle.coverage if prepared.bundle else None,
             "taste_diagnosis": self._diagnosis_payload(prepared, outcome),
         }
 
@@ -290,17 +300,19 @@ class MusicRoastService:
     def _diagnosis_payload(
         prepared: PreparedLibrary, outcome: RoastOutcome
     ) -> Optional[Dict[str, Any]]:
-        """Публичная часть диагноза: архетип + приговор + улики. Без axis_scores."""
-        diagnosis = prepared.diagnosis
-        if diagnosis is None:
+        """Публичная часть диагноза доктора + улики лаборатории."""
+        bundle = prepared.bundle
+        if bundle is None:
             return None
         return {
-            "snapshot_hash": diagnosis.snapshot_hash,
-            "archetype": diagnosis.archetype,
-            "axis": diagnosis.axis,
-            "verdict_phrase": outcome.diagnosis or diagnosis.archetype,
-            "evidence": evidence_lines(diagnosis),
-            "lyric_theme": diagnosis.lyric_theme,
+            "snapshot_hash": bundle.snapshot_hash,
+            "diagnosis_name": outcome.diagnosis_name,
+            "severity": outcome.severity,
+            "symptoms": outcome.symptoms,
+            "prescription": outcome.prescription,
+            "verdict_phrase": outcome.diagnosis,
+            "evidence": evidence_lines(bundle.evidence),
+            "lyric_theme": bundle.lyric_theme,
         }
 
     # ---------------------------------------------------------------- battle
@@ -328,7 +340,7 @@ class MusicRoastService:
             stats_block=prepared.stats_block,
             sample_lines=prepared.sample_lines(),
             chat_id=chat_id,
-            archetype=prepared.diagnosis.archetype if prepared.diagnosis else "",
+            diagnosis_name=outcome.diagnosis_name,
         )
 
     def generate_battle(
