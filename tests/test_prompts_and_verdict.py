@@ -1,7 +1,7 @@
 import json
 
 from app.prompts import BATTLE_VERSION, PromptManager, RoastLevel
-from app.services.gemini import parse_verdict, parse_winner
+from app.services.llm import parse_verdict, parse_winner
 
 
 def test_levels_registered():

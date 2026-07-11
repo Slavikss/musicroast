@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from app.config import GEMINI_TEXT_MODEL
+from app.config import LLM_API_KEY
 from app.models import PlaylistInfoRequest, PlaylistRequest, RoastRequest, Track
 from app.prompts import PromptManager, RoastLevel
 from app.services.battle import BattleSide
@@ -19,7 +19,7 @@ from app.services.diagnosis import (
     lyrics_coverage,
     pick_evidence,
 )
-from app.services.gemini import GeminiRoaster, RoastOutcome, parse_winner
+from app.services.llm import LLMRoaster, RoastOutcome, parse_winner
 from app.services.library_stats import (
     LibraryStats,
     compute_library_stats,
@@ -92,17 +92,17 @@ class MusicRoastService:
     def __init__(
         self,
         prompt_config_path: str | None = None,
-        google_api_key: str | None = None,
+        llm_api_key: str | None = None,
     ):
         prompt_config = prompt_config_path or os.getenv("PROMPT_CONFIG_PATH")
         self.prompt_manager = PromptManager(config_path=prompt_config)
 
-        api_key = google_api_key or os.getenv("GOOGLE_API_KEY")
+        api_key = llm_api_key or LLM_API_KEY
         if not api_key:
-            raise ValueError("Не найден GOOGLE_API_KEY")
+            raise ValueError("Не найден ключ LLM (OPENROUTER_API_KEY / LLM_API_KEY)")
 
         self.normalizer = TrackNormalizer()
-        self.roaster = GeminiRoaster(api_key, self.prompt_manager)
+        self.roaster = LLMRoaster(api_key, self.prompt_manager)
         # Кэш лаборатории по snapshot_hash: тот же снапшот → медкарта бесплатно
         self._medkarta_cache: Dict[str, MedkartaBundle] = {}
 
@@ -226,7 +226,7 @@ class MusicRoastService:
             top_artist = _top_artist_name(snapshot.tracks)
             candidates = pick_lyric_candidates(evidence, snapshot.tracks, top_artist)
             lyrics = collect_lyrics(service, candidates)
-            theme = extract_lyric_theme(self.roaster.client, GEMINI_TEXT_MODEL, lyrics)
+            theme = extract_lyric_theme(self.roaster.llm, lyrics)
             if theme:
                 lyric_theme = theme.theme
                 lyric_example = theme.example_line
@@ -373,7 +373,7 @@ class MusicRoastService:
                 else side_a.display_name
             )
             text = (
-                f"Судья Гемини воздержался от комментариев — счёт говорит сам "
+                f"Консилиум воздержался от комментариев — счёт говорит сам "
                 f"за себя.\n\n🏆 ПОБЕДИТЕЛЬ: {winner} — у {loser} вкус оказался "
                 f"позорнее по очкам."
             )

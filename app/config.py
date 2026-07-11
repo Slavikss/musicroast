@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Грузим .env как можно раньше: конфиг читается на импорте, до create_app()
+load_dotenv()
 
 STATIC_DIR = Path("static")
 IMAGE_DIR = STATIC_DIR / "images"
@@ -18,8 +22,16 @@ YANDEX_OAUTH_URL = (
 
 TOKEN_STORAGE_DEFAULT_TTL = int(os.getenv("TOKEN_STORAGE_DEFAULT_TTL", "86400"))
 
-GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-flash-latest")
-GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+# --- LLM (OpenAI-совместимый провайдер, по умолчанию OpenRouter) ---------
+# Ключ и модели задаются через env, чтобы менять провайдера/модель без правки кода.
+LLM_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY", "")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_TEXT_MODEL = os.getenv("LLM_TEXT_MODEL", "google/gemma-4-31b-it:free")
+LLM_IMAGE_MODEL = os.getenv("LLM_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview")
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "1.0"))
+# Необязательные заголовки ранжирования OpenRouter
+LLM_APP_URL = os.getenv("LLM_APP_URL", "https://github.com/musicroast")
+LLM_APP_TITLE = os.getenv("LLM_APP_TITLE", "MusicRoast")
 
 # Время жизни батла (сек) с момента создания до джойна второго участника
 BATTLE_TTL = int(os.getenv("BATTLE_TTL", "3600"))

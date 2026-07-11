@@ -1,18 +1,24 @@
-import json
 import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from io import BytesIO
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
-from google import genai
-from PIL import Image
 
-from app.config import GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL, IMAGE_DIR
+from app.config import (
+    IMAGE_DIR,
+    LLM_API_KEY,
+    LLM_APP_TITLE,
+    LLM_APP_URL,
+    LLM_BASE_URL,
+    LLM_IMAGE_MODEL,
+    LLM_TEMPERATURE,
+    LLM_TEXT_MODEL,
+)
 from app.models import Track
 from app.prompts import BATTLE_VERSION, PromptManager, RoastLevel
+from app.services.llm_client import LLMClient, LLMError, LLMRateLimited
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +36,11 @@ _WINNER_RE = re.compile(r"^WINNER:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 
 DEFAULT_PRESCRIPTION = "две недели слушать тишину, потом начать с чистого листа"
 
-# Смягчаем только harassment: прожарка — это дружеская агрессия по договорённости
-_SAFETY_SETTINGS = [
-    genai.types.SafetySetting(
-        category="HARM_CATEGORY_HARASSMENT",
-        threshold="BLOCK_ONLY_HIGH",
-    ),
-]
+# Сообщение при 429: доктор «уснул», а не «модель отказалась»
+DOCTOR_NAP_MESSAGE = (
+    "😴 Доктор прилёг вздремнуть прямо на кушетке — все кабинеты заняты, очередь. "
+    "Ткни ещё разок через минуту, он проснётся и дожарит."
+)
 
 _SOFTEN_SUFFIX = (
     "\n\nВАЖНО: сделай текст чуть мягче по формулировкам, сохрани сарказм, "
@@ -143,53 +147,48 @@ def _first_line(text: str) -> str:
     return "вкус не поддаётся диагностике"
 
 
-class GeminiRoaster:
-    """Класс для работы с Google Gemini API."""
+class LLMRoaster:
+    """Провайдер-независимый роастер. Модель и провайдер берутся из env."""
 
-    def __init__(self, api_key: str, prompt_manager: PromptManager):
-        self.client = genai.Client(api_key=api_key)
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        prompt_manager: Optional[PromptManager] = None,
+        *,
+        base_url: Optional[str] = None,
+        text_model: Optional[str] = None,
+        image_model: Optional[str] = None,
+        temperature: Optional[float] = None,
+    ):
         self.prompt_manager = prompt_manager
+        self.llm = LLMClient(
+            api_key or LLM_API_KEY,
+            base_url=base_url or LLM_BASE_URL,
+            text_model=text_model or LLM_TEXT_MODEL,
+            image_model=image_model or LLM_IMAGE_MODEL,
+            temperature=LLM_TEMPERATURE if temperature is None else temperature,
+            app_url=LLM_APP_URL,
+            app_title=LLM_APP_TITLE,
+        )
 
     # ------------------------------------------------------------------ text
 
-    def _call_text_model(self, system_prompt: str, user_prompt: str) -> str:
-        response = self.client.models.generate_content(
-            model=GEMINI_TEXT_MODEL,
-            contents=user_prompt,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                safety_settings=_SAFETY_SETTINGS,
-                temperature=1.0,
-            ),
-        )
-
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
-            raise _safety_error(response)
-
-        finish_reason = str(getattr(candidates[0], "finish_reason", "") or "")
-        if "SAFETY" in finish_reason.upper():
-            raise _SafetyBlocked()
-
-        text = response.text
-        if not text or not text.strip():
-            raise _SafetyBlocked()
-        return text
-
     def _generate_with_retry(self, system_prompt: str, user_prompt: str) -> str:
         try:
-            return self._call_text_model(system_prompt, user_prompt)
-        except _SafetyBlocked:
-            logger.warning("Gemini safety block, retrying with softened prompt")
+            return self.llm.chat(user_prompt, system=system_prompt)
+        except LLMRateLimited as exc:
+            raise HTTPException(status_code=503, detail=DOCTOR_NAP_MESSAGE) from exc
+        except LLMError:
+            logger.warning("LLM refused/empty, retrying with softened prompt")
             try:
-                return self._call_text_model(
-                    system_prompt + _SOFTEN_SUFFIX, user_prompt
-                )
-            except _SafetyBlocked as exc:
+                return self.llm.chat(user_prompt, system=system_prompt + _SOFTEN_SUFFIX)
+            except LLMRateLimited as exc:
+                raise HTTPException(status_code=503, detail=DOCTOR_NAP_MESSAGE) from exc
+            except LLMError as exc:
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        "Gemini отказался жарить на этом уровне. "
+                        "Модель отказалась жарить на этом уровне. "
                         "Попробуй уровень мягче."
                     ),
                 ) from exc
@@ -241,9 +240,9 @@ class GeminiRoaster:
         except HTTPException:
             raise
         except Exception as exc:
-            logger.exception("Gemini roast generation failed")
+            logger.exception("LLM roast generation failed")
             raise HTTPException(
-                status_code=502, detail=f"Ошибка Gemini API: {exc}"
+                status_code=502, detail=f"Ошибка LLM API: {exc}"
             ) from exc
 
         outcome = parse_verdict(raw_text)
@@ -253,33 +252,15 @@ class GeminiRoaster:
 
     def _extract_verdict_fallback(self, roast_text: str) -> List[str]:
         """Дешёвый структурный вызов, если модель не вернула блок вердикта."""
-        try:
-            response = self.client.models.generate_content(
-                model=GEMINI_TEXT_MODEL,
-                contents=(
-                    "Вот текст прожарки музыкального вкуса. Выдели из него "
-                    "3 самых позорных факта (коротко, с цифрами если есть):\n\n"
-                    + roast_text
-                ),
-                config=genai.types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "object",
-                        "properties": {
-                            "facts": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            }
-                        },
-                        "required": ["facts"],
-                    },
-                ),
-            )
-            data = json.loads(response.text)
-            return [str(fact) for fact in data.get("facts", [])][:3]
-        except Exception:  # noqa: BLE001 — вердикт не должен ронять прожарку
-            logger.warning("verdict fallback extraction failed", exc_info=True)
+        data = self.llm.chat_json(
+            "Вот текст прожарки музыкального вкуса. Выдели из него 3 самых "
+            "позорных факта (коротко, с цифрами если есть). Верни JSON вида "
+            '{"facts": ["...", "...", "..."]}.\n\n' + roast_text
+        )
+        if not data:
             return []
+        facts = data.get("facts", [])
+        return [str(fact) for fact in facts][:3] if isinstance(facts, list) else []
 
     # ---------------------------------------------------------------- battle
 
@@ -294,9 +275,9 @@ class GeminiRoaster:
         except HTTPException:
             raise
         except Exception as exc:
-            logger.exception("Gemini battle verdict failed")
+            logger.exception("LLM battle verdict failed")
             raise HTTPException(
-                status_code=502, detail=f"Ошибка Gemini API: {exc}"
+                status_code=502, detail=f"Ошибка LLM API: {exc}"
             ) from exc
 
     # ----------------------------------------------------------------- image
@@ -313,26 +294,11 @@ class GeminiRoaster:
                 + roast_text
             )
 
-            response = self.client.models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
-                contents=prompt,
-            )
-
-            image_parts = [
-                part.inline_data.data
-                for part in response.candidates[0].content.parts
-                if part.inline_data
-            ]
-
-            if not image_parts:
-                raise HTTPException(
-                    status_code=502, detail="Не удалось сгенерировать изображение"
-                )
+            image_bytes = self.llm.generate_image(prompt)
 
             image_filename = f"{uuid.uuid4()}.png"
             image_path = IMAGE_DIR / image_filename
-            image = Image.open(BytesIO(image_parts[0]))
-            image.save(image_path)
+            image_path.write_bytes(image_bytes)
 
             return {
                 "image_url": f"/static/images/{image_filename}",
@@ -345,14 +311,3 @@ class GeminiRoaster:
             raise HTTPException(
                 status_code=502, detail=f"Ошибка генерации изображения: {exc}"
             ) from exc
-
-
-class _SafetyBlocked(Exception):
-    """Модель отказалась отвечать из-за safety-фильтра."""
-
-
-def _safety_error(response: object) -> Exception:
-    feedback = getattr(response, "prompt_feedback", None)
-    if feedback and getattr(feedback, "block_reason", None):
-        return _SafetyBlocked()
-    return _SafetyBlocked()

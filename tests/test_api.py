@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.gemini import GeminiRoaster, RoastOutcome
+from app.services.llm import LLMRoaster, RoastOutcome
 
 VALID_TOKEN = "y0_AgAAAABkZXYtdG9rZW4tZm9yLXRlc3Rz"
 
@@ -27,10 +27,10 @@ def client(monkeypatch):
     def fake_battle_verdict(self, dossier_a, dossier_b):
         return "Бой был жарким.\n🏆 ПОБЕДИТЕЛЬ: A — меньше кринжа.\nWINNER: A"
 
-    monkeypatch.setattr(GeminiRoaster, "generate_roast", fake_generate_roast)
-    monkeypatch.setattr(GeminiRoaster, "generate_battle_verdict", fake_battle_verdict)
+    monkeypatch.setattr(LLMRoaster, "generate_roast", fake_generate_roast)
+    monkeypatch.setattr(LLMRoaster, "generate_battle_verdict", fake_battle_verdict)
 
-    # Лирик-слой не должен ходить в реальный Gemini из тестов
+    # Лирик-слой не должен ходить в реальный LLM из тестов
     import app.services.music_roast as music_roast_module
 
     monkeypatch.setattr(
