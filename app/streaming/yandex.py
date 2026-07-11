@@ -387,8 +387,15 @@ class YandexMusicStreamingService(StreamingService):
             logger.warning("taste snapshot: rotor_stations_list() failed", exc_info=True)
 
         try:
-            rotor_status = self.client.rotor_account_status()
-            snapshot.skips_per_hour = getattr(rotor_status, "skips_per_hour", None)
+            # Забираем сырой JSON вместо client.rotor_account_status(): у yandex-music
+            # 3.0.0 модель Subscription требует поля had_any_subscription, которого в
+            # текущем ответе API нет, из-за чего десериализация всего Status падает и
+            # мы теряем skips_per_hour. Нужное поле лежит на верхнем уровне ответа.
+            raw_status = self.client._request.get(
+                f"{self.client.base_url}/rotor/account/status"
+            )
+            if isinstance(raw_status, dict):
+                snapshot.skips_per_hour = raw_status.get("skips_per_hour")
         except Exception:  # noqa: BLE001
             logger.warning("taste snapshot: rotor_account_status() failed", exc_info=True)
 
