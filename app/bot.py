@@ -11,9 +11,9 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import quote
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import BotCommand, CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from fastapi import HTTPException
 
@@ -44,6 +44,19 @@ from app.utils import convert_markdown_to_html, parse_token_input, split_for_tel
 logger = logging.getLogger(__name__)
 
 _LEVEL_ORDER = [RoastLevel.LIGHT, RoastLevel.MEDIUM, RoastLevel.CREMATION]
+
+HELP_TEXT = (
+    "🩺 <b>Я — музыкальный доктор.</b> Кладу твой плейлист на стол и ставлю "
+    "диагноз по фактам: сколько лет ты слушаешь одно и то же, где залип и чем "
+    "позоришься. Без анестезии.\n\n"
+    "<b>Как проходит приём:</b>\n"
+    "1. «🔑 Войти в Яндекс» — открой мне свою карту (лайки и плейлисты).\n"
+    "2. «🔥 Прожарить» — выбери плейлист и уровень боли, я проведу осмотр.\n"
+    "3. «⚔️ Батл с другом» — сверим карты, чей вкус безнадёжнее.\n"
+    "4. «🖼 Обложка позора» — портрет твоего диагноза.\n\n"
+    "/start — регистратура · /help — этот листок\n"
+    "<i>Диагноз — не приговор… хотя в твоём случае возможны варианты.</i>"
+)
 
 
 @dataclass
@@ -151,21 +164,34 @@ def create_dispatcher(
         has_token = bool(await _get_token(user.id))
         if has_token:
             await message.answer(
-                "С возвращением! Токен на месте. Что делаем?",
+                "🩺 О, снова ты. Карта на месте — ложись, посмотрим, что там "
+                "выросло с прошлого раза.",
                 reply_markup=_menu_keyboard(True),
             )
             return
 
         await message.answer(
-            "🔥 Привет! Я MusicRoast — прожарю твой музыкальный вкус по фактам: "
-            "цифры, даты, имена. Больно будет по делу.\n\n"
-            "Жми «🔑 Войти в Яндекс» — я дам код, ты подтвердишь вход на странице "
-            "Яндекса, и всё. Никаких паролей мне присылать не надо.\n\n"
+            "🩺 Здравствуй, пациент. Я — музыкальный доктор. Открывай карту: "
+            "положу твой плейлист на стол и поставлю диагноз по фактам — цифры, "
+            "даты, имена. Будет больно, но честно.\n\n"
+            "Жми «🔑 Войти в Яндекс» — выдам талончик (код), подтвердишь вход на "
+            "странице Яндекса, и всё. Пароли мне не неси, я не регистратура.\n\n"
             f"<i>Запасной путь: открой <a href=\"{YANDEX_OAUTH_URL}\">эту ссылку</a>, "
             "авторизуйся и пришли сюда адрес страницы, куда тебя перекинет "
             "(или сам токен).</i>",
             reply_markup=_menu_keyboard(False),
             parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    @router.message(Command("help"))
+    async def on_help(message: Message) -> None:
+        user = message.from_user
+        has_token = bool(await _get_token(user.id)) if user else False
+        await message.answer(
+            HELP_TEXT,
+            parse_mode="HTML",
+            reply_markup=_menu_keyboard(has_token),
             disable_web_page_preview=True,
         )
 
@@ -175,7 +201,7 @@ def create_dispatcher(
         record = await roast_registry.get(roast_id)
         if not record:
             await message.answer(
-                "Прожарка друга уже сгорела 🔥 Но твоя ещё впереди.",
+                "Карта твоего друга уже в архиве 🔥 Но твоя — свежачок, идём на осмотр.",
                 reply_markup=_menu_keyboard(bool(await _get_token(user_id))),
             )
             return
@@ -224,13 +250,13 @@ def create_dispatcher(
         has_token = bool(await _get_token(user_id))
         text = (
             f"⚔️ <b>{_esc(battle.initiator.display_name)}</b> вызывает тебя на "
-            f"музыкальный батл!\n\nЕго вкус уже оценён. Чтобы принять вызов, "
-            f"нужна твоя прожарка."
+            f"музыкальный батл!\n\nЕго карту уже осмотрели. Чтобы принять вызов, "
+            f"нужен твой осмотр."
         )
         if has_token:
-            text += "\n\nЖми «🔥 Прожарить» — потом сразу объявлю вердикт."
+            text += "\n\nЖми «🔥 Прожарить» — потом сразу объявлю вердикт консилиума."
         else:
-            text += "\n\nСначала войди в Яндекс 👇"
+            text += "\n\nСначала открой карту 👇"
         await message.answer(
             text, parse_mode="HTML", reply_markup=_menu_keyboard(has_token)
         )
@@ -246,7 +272,7 @@ def create_dispatcher(
         except Exception:  # noqa: BLE001
             logger.exception("device auth start failed")
             await callback.message.answer(
-                "Яндекс не выдал код входа, попробуй ещё раз чуть позже.\n"
+                "Регистратура Яндекса не выдала талончик, попробуй ещё раз чуть позже.\n"
                 f"Или запасной путь: {YANDEX_OAUTH_URL}\n"
                 "— авторизуйся и пришли сюда адрес страницы после редиректа."
             )
@@ -258,10 +284,10 @@ def create_dispatcher(
         builder.adjust(1)
 
         status_msg = await callback.message.answer(
-            f"🔐 Твой код входа: <code>{_esc(session.user_code)}</code>\n\n"
+            f"🔐 Держи талончик: <code>{_esc(session.user_code)}</code>\n\n"
             "1. Жми «🌐 Открыть Яндекс»\n"
-            "2. Войди в аккаунт и введи этот код (тапни по коду — он скопируется)\n"
-            "3. Возвращайся — я замечу сам 😉",
+            "2. Войди в аккаунт и введи этот номер (тапни — он скопируется)\n"
+            "3. Возвращайся в кабинет — я замечу сам 😉",
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
         )
@@ -276,9 +302,10 @@ def create_dispatcher(
 
         if session.status in (EXPIRED, CANCELLED):
             text = (
-                "⌛ Код протух, а ты так и не вошёл. Жми «🔑 Войти в Яндекс» ещё раз."
+                "⌛ Талончик просрочен, а ты так и не дошёл до кабинета. "
+                "Жми «🔑 Войти в Яндекс» ещё раз."
                 if session.status == EXPIRED
-                else "Вход отменён."
+                else "Приём отменён."
             )
             try:
                 await status_msg.edit_text(text, reply_markup=_menu_keyboard(False))
@@ -298,7 +325,7 @@ def create_dispatcher(
                 ),
             )
         except HTTPException as exc:
-            await status_msg.edit_text(f"Токен получен, но не подошёл: {exc.detail}")
+            await status_msg.edit_text(f"Талончик получил, но карта не открылась: {exc.detail}")
             return
 
         await token_storage.set(
@@ -311,8 +338,8 @@ def create_dispatcher(
         name = account.get("display_name", "меломан")
         liked = account.get("liked_count", 0)
         await status_msg.edit_text(
-            f"✅ Привет, <b>{_esc(name)}</b>! Вижу <b>{liked}</b> лайкнутых "
-            f"треков. Уже есть что предъявить.",
+            f"✅ Карта открыта, <b>{_esc(name)}</b>. Вижу <b>{liked}</b> лайков — "
+            f"есть на что посмотреть. На осмотр?",
             parse_mode="HTML",
             reply_markup=_menu_keyboard(True),
         )
@@ -325,7 +352,7 @@ def create_dispatcher(
         await device_auth_manager.cancel(session_id)
         try:
             await callback.message.edit_text(
-                "Вход отменён.", reply_markup=_menu_keyboard(False)
+                "Приём отменён.", reply_markup=_menu_keyboard(False)
             )
         except Exception:  # noqa: BLE001
             pass
@@ -341,13 +368,13 @@ def create_dispatcher(
         parsed = parse_token_input(message.text)
         if not parsed:
             await message.answer(
-                "Не нашёл токен в сообщении. Жми «🔑 Войти в Яндекс» — так проще "
-                "всего. Или пришли ссылку, куда тебя перекинуло после авторизации.",
+                "Токена в этом сообщении не нашёл, пациент. Проще всего — «🔑 Войти "
+                "в Яндекс». Или пришли ссылку, куда тебя перекинуло после авторизации.",
                 reply_markup=_menu_keyboard(bool(await _get_token(user.id))),
             )
             return
 
-        status_msg = await message.answer("🔎 Проверяю токен...")
+        status_msg = await message.answer("🔎 Открываю твою карту...")
         loop = asyncio.get_running_loop()
         try:
             account = await loop.run_in_executor(
@@ -358,7 +385,7 @@ def create_dispatcher(
             )
         except HTTPException as exc:
             await status_msg.edit_text(
-                f"Токен не подошёл: {exc.detail}\nПопробуй «🔑 Войти в Яндекс».",
+                f"Карта не открылась: {exc.detail}\nДавай через «🔑 Войти в Яндекс».",
                 reply_markup=_menu_keyboard(False),
             )
             return
@@ -369,8 +396,8 @@ def create_dispatcher(
         name = account.get("display_name", "меломан")
         liked = account.get("liked_count", 0)
         await status_msg.edit_text(
-            f"✅ Привет, <b>{_esc(name)}</b>! Вижу <b>{liked}</b> лайкнутых "
-            f"треков. Готов к прожарке?",
+            f"✅ Открыл твою карту, <b>{_esc(name)}</b>: <b>{liked}</b> лайков. "
+            f"Ну что, приступим к осмотру?",
             parse_mode="HTML",
             reply_markup=_menu_keyboard(True),
         )
@@ -382,12 +409,12 @@ def create_dispatcher(
             return
         kind, _payload = intent
         hint = (
-            "Дожарим тебя — и я покажу полную прожарку друга и вердикт."
+            "Сначала осмотрю тебя — потом покажу карту друга и кто из вас безнадёжнее."
             if kind == "referral"
-            else "Осталось прожариться — и я объявлю вердикт батла."
+            else "Осталось пройти осмотр — и объявлю вердикт батла."
         )
         builder = InlineKeyboardBuilder()
-        builder.button(text="🔥 Погнали", callback_data="roast")
+        builder.button(text="🔥 На осмотр", callback_data="roast")
         await message.answer(hint, reply_markup=builder.as_markup())
 
     # ----------------------------------------------------------------- roast
@@ -397,7 +424,7 @@ def create_dispatcher(
         user = callback.from_user
         token = await _get_token(user.id)
         if not token:
-            await callback.answer("Сначала войди в Яндекс 🔑", show_alert=True)
+            await callback.answer("Сначала открой карту — «🔑 Войти в Яндекс»", show_alert=True)
             return
         await callback.answer()
 
@@ -418,7 +445,7 @@ def create_dispatcher(
             if exc.status_code == 401:
                 await token_storage.delete(str(user.id))
                 await callback.message.answer(
-                    "Токен протух 😢 Войди в Яндекс заново.",
+                    "Карта устарела 😢 Войди в Яндекс заново.",
                     reply_markup=_menu_keyboard(False),
                 )
                 return
@@ -440,7 +467,7 @@ def create_dispatcher(
                 builder.button(text=label[:60], callback_data=f"pl:{kind}")
         builder.adjust(1)
         await callback.message.answer(
-            "Что жарим?", reply_markup=builder.as_markup()
+            "Что кладём на стол?", reply_markup=builder.as_markup()
         )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("pl:"))
@@ -470,17 +497,17 @@ def create_dispatcher(
         token = await _get_token(user.id)
         if not token:
             await callback.message.answer(
-                "Токен протух 😢 Войди в Яндекс заново.",
+                "Карта устарела 😢 Войди в Яндекс заново.",
                 reply_markup=_menu_keyboard(False),
             )
             return
 
         display_name = user.first_name or user.username or "боец"
         try:
-            await callback.message.edit_text("📀 Читаю плейлист...")
+            await callback.message.edit_text("📀 Открываю твою карту...")
             status_msg = callback.message
         except Exception:  # noqa: BLE001
-            status_msg = await callback.message.answer("📀 Читаю плейлист...")
+            status_msg = await callback.message.answer("📀 Открываю твою карту...")
 
         await _run_roast_flow(status_msg, user.id, display_name, token, kind, level)
 
@@ -506,22 +533,22 @@ def create_dispatcher(
             if exc.status_code == 401:
                 await token_storage.delete(str(user_id))
                 await status_msg.edit_text(
-                    "Токен протух 😢 Войди в Яндекс заново.",
+                    "Карта устарела 😢 Войди в Яндекс заново.",
                     reply_markup=_menu_keyboard(False),
                 )
             else:
-                await status_msg.edit_text(f"Не вышло: {exc.detail}")
+                await status_msg.edit_text(f"Осмотр сорвался: {exc.detail}")
             return
         except Exception:  # noqa: BLE001
             logger.exception("prepare_library failed")
-            await status_msg.edit_text("Не смог прочитать плейлист. Попробуй позже.")
+            await status_msg.edit_text("Не смог открыть твою карту. Попробуй позже.")
             return
 
         total = prepared.metadata.get("track_count", len(prepared.tracks))
-        tease = f"🧮 Посчитал: {total} треков"
+        tease = f"🧮 В карте {total} треков"
         if prepared.top_artist:
-            tease += f", топ — {prepared.top_artist}"
-        tease += ". Гемини уже ржёт, набирает текст..."
+            tease += f", лидер — {prepared.top_artist}"
+        tease += ". Доктор надевает перчатки и берёт скальпель..."
         try:
             await status_msg.edit_text(tease)
         except Exception:  # noqa: BLE001
@@ -533,11 +560,13 @@ def create_dispatcher(
                 None, lambda: service.roast_library(prepared, level=level)
             )
         except HTTPException as exc:
-            await status_msg.edit_text(f"🚫 {exc.detail}")
+            # 503 = «доктор прилёг вздремнуть» (429): показываем как есть, без 🚫
+            prefix = "" if exc.status_code == 503 else "🚫 "
+            await status_msg.edit_text(f"{prefix}{exc.detail}")
             return
         except Exception:  # noqa: BLE001
             logger.exception("roast_library failed")
-            await status_msg.edit_text("Гемини подавился. Попробуй ещё раз.")
+            await status_msg.edit_text("Доктор поперхнулся кофе. Попробуй ещё раз.")
             return
 
         bundle = prepared.bundle
@@ -602,17 +631,16 @@ def create_dispatcher(
             await status_msg.delete()
         except Exception:  # noqa: BLE001
             pass
-        await _send_roast_text(status_msg, outcome.text)
 
-        # Карточка доктора отдельным форвардабельным сообщением
+        # Полный вердикт ОДНИМ сообщением: длинный осмотр + карта-выписка для шера
         card_lines = [
-            f"🔥 <b>ПРОЖАРКА: {_esc(display_name)}</b>",
-            f"Уровень: {_esc(LEVEL_TITLES[level])}",
-            f"Вкус: <b>{outcome.score}/10</b>",
+            f"🩺 <b>ВЫПИСКА · {_esc(display_name)}</b>",
+            f"Уровень боли: {_esc(LEVEL_TITLES[level])}",
+            f"Здоровье вкуса: <b>{outcome.score}/10</b>",
         ]
         if bundle is not None:
             card_lines.append(
-                f"🩺 Диагноз: <b>{_esc(outcome.diagnosis_name)}</b> "
+                f"Диагноз: <b>{_esc(outcome.diagnosis_name)}</b> "
                 f"(стадия {outcome.severity}/10)"
             )
         card_lines.append(f"Приговор: <i>{_esc(outcome.diagnosis)}</i>")
@@ -630,11 +658,22 @@ def create_dispatcher(
         if diff_line:
             card_lines.append("")
             card_lines.append(f"📈 {_esc(diff_line)}")
-        await status_msg.answer(
-            "\n".join(card_lines),
-            parse_mode="HTML",
-            reply_markup=_share_keyboard(last),
-        )
+        card = "\n".join(card_lines)
+
+        chunks = split_for_telegram(outcome.text)
+        for idx, chunk in enumerate(chunks):
+            is_last = idx == len(chunks) - 1
+            body = convert_markdown_to_html(chunk)
+            if is_last:
+                body = f"{body}\n\n➖➖➖➖➖\n{card}"
+            try:
+                await status_msg.answer(
+                    body,
+                    parse_mode="HTML",
+                    reply_markup=_share_keyboard(last) if is_last else None,
+                )
+            except Exception:  # noqa: BLE001 — HTML мог не собраться
+                await status_msg.answer(chunk + (f"\n\n{card}" if is_last else ""))
 
         await _process_intent_after_roast(status_msg, user_id, display_name, last)
 
@@ -655,7 +694,7 @@ def create_dispatcher(
             if not friend:
                 return
             await message.answer(
-                f"🤝 Как и обещал — полная прожарка "
+                f"🤝 Как и обещал — вот полная карта "
                 f"<b>{_esc(friend.display_name)}</b>:",
                 parse_mode="HTML",
             )
@@ -674,7 +713,7 @@ def create_dispatcher(
         friend: RoastRecord,
     ) -> None:
         loop = asyncio.get_running_loop()
-        status = await message.answer("⚖️ Судья Гемини сравнивает ваши библиотеки...")
+        status = await message.answer("⚖️ Консилиум сравнивает ваши карты...")
 
         my_side = BattleSide(
             display_name=display_name,
@@ -699,7 +738,7 @@ def create_dispatcher(
             )
         except Exception:  # noqa: BLE001
             logger.exception("auto battle failed")
-            await status.edit_text("Судья не смог определиться. Бывает.")
+            await status.edit_text("Консилиум так и не договорился. Бывает.")
             return
 
         text = f"{verdict['header']}\n\n{verdict['text']}"
@@ -715,8 +754,8 @@ def create_dispatcher(
             try:
                 await message.bot.send_message(
                     int(friend_key),
-                    f"😈 <b>{_esc(display_name)}</b> прожарился по твоей ссылке! "
-                    f"Вердикт судьи:",
+                    f"😈 <b>{_esc(display_name)}</b> лёг на осмотр по твоей ссылке! "
+                    f"Вердикт консилиума:",
                     parse_mode="HTML",
                 )
                 for chunk in split_for_telegram(text):
@@ -752,7 +791,7 @@ def create_dispatcher(
             return
 
         status = await message.answer(
-            "⚔️ Оба бойца на ринге, судья Гемини совещается..."
+            "⚔️ Оба пациента на столе, консилиум совещается..."
         )
         try:
             verdict = await loop.run_in_executor(
@@ -761,7 +800,7 @@ def create_dispatcher(
             )
         except Exception:  # noqa: BLE001
             logger.exception("battle verdict failed")
-            await status.edit_text("Судья не смог определиться. Бывает.")
+            await status.edit_text("Консилиум так и не договорился. Бывает.")
             return
 
         text = f"{verdict['header']}\n\n{verdict['text']}"
@@ -778,7 +817,7 @@ def create_dispatcher(
             try:
                 await message.bot.send_message(
                     initiator_chat,
-                    f"⚔️ <b>{_esc(display_name)}</b> принял твой вызов! Вердикт:",
+                    f"⚔️ <b>{_esc(display_name)}</b> принял вызов! Вердикт консилиума:",
                     parse_mode="HTML",
                 )
                 for chunk in split_for_telegram(text):
@@ -797,14 +836,14 @@ def create_dispatcher(
         user = callback.from_user
         last = last_roasts.get(user.id)
         if not last:
-            await callback.answer("Сначала прожарься 🔥", show_alert=True)
+            await callback.answer("Сначала загляни на осмотр 🔥", show_alert=True)
             return
         token = await _get_token(user.id)
         if not token:
-            await callback.answer("Токен протух, войди заново 🔑", show_alert=True)
+            await callback.answer("Карта устарела, войди заново 🔑", show_alert=True)
             return
         await callback.answer()
-        status_msg = await callback.message.answer("📀 Читаю плейлист заново...")
+        status_msg = await callback.message.answer("📀 Открываю карту заново...")
         display_name = user.first_name or user.username or "боец"
         await _run_roast_flow(
             status_msg, user.id, display_name, token, last.playlist_kind, last.level
@@ -815,11 +854,11 @@ def create_dispatcher(
         user = callback.from_user
         last = last_roasts.get(user.id)
         if not last:
-            await callback.answer("Сначала прожарься 🔥", show_alert=True)
+            await callback.answer("Сначала загляни на осмотр 🔥", show_alert=True)
             return
         await callback.answer()
         status_msg = await callback.message.answer(
-            "🎨 Рисую обложку позора... это займёт полминуты"
+            "🎨 Штатный художник рисует твою обложку позора... полминуты терпения"
         )
         loop = asyncio.get_running_loop()
         try:
@@ -827,11 +866,11 @@ def create_dispatcher(
                 None, lambda: service.roaster.generate_image(last.text)
             )
         except HTTPException as exc:
-            await status_msg.edit_text(f"Художник забастовал: {exc.detail}")
+            await status_msg.edit_text(f"Штатный художник запил: {exc.detail}")
             return
         except Exception:  # noqa: BLE001
             logger.exception("cover generation failed")
-            await status_msg.edit_text("Художник забастовал. Попробуй позже.")
+            await status_msg.edit_text("Штатный художник запил. Попробуй позже.")
             return
 
         caption = f"🖼 Обложка позора · вкус {last.score}/10 · {last.diagnosis}"
@@ -851,7 +890,7 @@ def create_dispatcher(
         last = last_roasts.get(user.id)
         if not last:
             await callback.answer(
-                "Сначала прожарься — батл идёт по результатам 🔥", show_alert=True
+                "Сначала пройди осмотр — батл идёт по диагнозам 🔥", show_alert=True
             )
             return
         await callback.answer()
@@ -880,9 +919,9 @@ def create_dispatcher(
         builder.button(text="📨 Отправить вызов", url=share_url)
         builder.adjust(1)
         await callback.message.answer(
-            f"⚔️ Батл создан!\n\nКод: <code>{battle.code}</code>\n"
+            f"⚔️ Батл назначен!\n\nКод: <code>{battle.code}</code>\n"
             f"Ссылка для соперника:\n{link}\n\n"
-            f"Как только друг прожарится — я объявлю вердикт обоим. "
+            f"Как только друг ляжет на осмотр — объявлю вердикт обоим. "
             f"Вызов живёт час.",
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
@@ -908,7 +947,32 @@ async def run_bot(service: Optional[MusicRoastService] = None) -> None:
         username = me.username
 
     dispatcher = create_dispatcher(service, bot_username=username)
+    # Снимаем возможный webhook: при активном webhook long-polling ловит
+    # 409 Conflict и молча умирает. drop_pending_updates — чистим очередь.
+    await bot.delete_webhook(drop_pending_updates=True)
+    await _setup_bot_profile(bot)
+    logger.info("Bot @%s: webhook снят, стартую long-polling", username)
     await dispatcher.start_polling(bot)
+
+
+async def _setup_bot_profile(bot: Bot) -> None:
+    """Меню команд и описание бота — в докторском стиле. Сбои не критичны."""
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="🩺 Регистратура"),
+                BotCommand(command="help", description="📋 Как проходит осмотр"),
+            ]
+        )
+        await bot.set_my_short_description(
+            "Музыкальный доктор: ставит диагноз твоему вкусу по фактам. Будет больно."
+        )
+        await bot.set_my_description(
+            "🩺 Кладу твой плейлист на стол и ставлю диагноз: где ты застрял, чем "
+            "позоришься и чем это лечить. Жми /start — и на осмотр."
+        )
+    except Exception:  # noqa: BLE001 — профиль не должен ронять запуск
+        logger.warning("не удалось выставить профиль бота", exc_info=True)
 
 
 if __name__ == "__main__":

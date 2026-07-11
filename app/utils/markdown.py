@@ -1,4 +1,4 @@
-"""Helpers for cleaning up Gemini markdown output for Telegram."""
+"""Helpers for cleaning up LLM markdown output for Telegram."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ _UNDERSCORE_PATTERN = re.compile(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.DOTALL)
 
 
 def convert_markdown_to_html(text: str) -> str:
-    """Transform Gemini markdown into Telegram-friendly HTML."""
+    """Transform LLM markdown into Telegram-friendly HTML."""
     if not text:
         return ""
 

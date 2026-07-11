@@ -58,8 +58,19 @@ def create_app() -> FastAPI:
         if APP_MODE in {"both", "bot"} and os.getenv("TELEGRAM_BOT_TOKEN"):
             from app.bot import run_bot
 
-            bot_task = asyncio.create_task(run_bot(service))
+            async def _bot_runner() -> None:
+                # Иначе исключение poll'а тонет в task и бот молча не отвечает
+                try:
+                    await run_bot(service)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Telegram bot crashed")
+
+            bot_task = asyncio.create_task(_bot_runner())
             logger.info("Telegram bot polling started (APP_MODE=%s)", APP_MODE)
+        elif APP_MODE in {"both", "bot"}:
+            logger.warning("APP_MODE=%s, но TELEGRAM_BOT_TOKEN не задан — бот выключен", APP_MODE)
         yield
         if bot_task:
             bot_task.cancel()

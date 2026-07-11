@@ -7,7 +7,6 @@ Head-выборка ≤ 10 треков, каждый текст обрезае�
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Protocol, Sequence
@@ -70,32 +69,20 @@ def collect_lyrics(fetcher: LyricsFetcher, candidates: Sequence[Track]) -> List[
     return lyrics
 
 
-def extract_lyric_theme(genai_client, model: str, lyrics: List[str]) -> Optional[LyricTheme]:
+def extract_lyric_theme(llm, lyrics: List[str]) -> Optional[LyricTheme]:
     """Один структурный вызов: доминирующая тема текстов. Провал = None."""
     if len(lyrics) < MIN_LYRICS:
         return None
     try:
-        response = genai_client.models.generate_content(
-            model=model,
-            contents=(
-                "Вот тексты песен из библиотеки одного человека. Определи ОДНУ "
-                "доминирующую тему/настроение этих текстов (коротко, до 10 слов, "
-                "по-русски, можно едко) и приведи одну характерную строчку.\n\n"
-                + "\n\n---\n\n".join(lyrics)
-            ),
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": {
-                    "type": "object",
-                    "properties": {
-                        "theme": {"type": "string"},
-                        "example_line": {"type": "string"},
-                    },
-                    "required": ["theme", "example_line"],
-                },
-            },
+        data = llm.chat_json(
+            "Вот тексты песен из библиотеки одного человека. Определи ОДНУ "
+            "доминирующую тему/настроение этих текстов (коротко, до 10 слов, "
+            "по-русски, можно едко) и приведи одну характерную строчку. Верни "
+            'JSON вида {"theme": "...", "example_line": "..."}.\n\n'
+            + "\n\n---\n\n".join(lyrics)
         )
-        data = json.loads(response.text)
+        if not data:
+            return None
         theme = str(data.get("theme", "")).strip()
         if not theme:
             return None
